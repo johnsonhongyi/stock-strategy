@@ -7,6 +7,7 @@ type Props = {
 	state?: 'loading' | 'ready' | 'error' | 'idle';
 	mode?: 'intraday' | 'daily';
 	periodLabel?: string;
+	compact?: boolean;
 };
 
 function formatTime(value: string, mode: 'intraday' | 'daily', periodLabel: string) {
@@ -55,20 +56,21 @@ function intradayLimitPercent(symbol = '') {
 	return 10;
 }
 
-export function KLineChart({ lines, symbol, state = 'ready', mode = 'daily', periodLabel = '日K' }: Props) {
+export function KLineChart({ lines, symbol, state = 'ready', mode = 'daily', periodLabel = '日K', compact = false }: Props) {
 	const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-	if (state === 'loading') return <div className="kline-chart-placeholder">正在加载{periodLabel}数据…</div>;
-	if (!lines.length) return <div className="kline-chart-placeholder">{state === 'error' ? `${periodLabel}数据暂不可用，请稍后重试。` : `暂无${periodLabel}数据。`}</div>;
+	const placeholderClass = compact ? 'kline-chart-placeholder compact' : 'kline-chart-placeholder';
+	if (state === 'loading') return <div className={placeholderClass}>正在加载{periodLabel}数据…</div>;
+	if (!lines.length) return <div className={placeholderClass}>{state === 'error' ? `${periodLabel}数据暂不可用，请稍后重试。` : `暂无${periodLabel}数据。`}</div>;
 
 	const sorted = [...lines].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
-	const width = 960;
-	const height = 430;
-	const left = 52;
-	const right = 72;
-	const chartTop = 20;
-	const chartBottom = 316;
-	const volumeTop = 338;
-	const volumeBottom = 388;
+	const width = compact ? 640 : 960;
+	const height = compact ? 300 : 430;
+	const left = compact ? 38 : 52;
+	const right = compact ? 58 : 72;
+	const chartTop = compact ? 14 : 20;
+	const chartBottom = compact ? 210 : 316;
+	const volumeTop = compact ? 232 : 338;
+	const volumeBottom = compact ? 266 : 388;
 	const plotWidth = width - left - right;
 	const minPrice = Math.min(...sorted.map((line) => line.low));
 	const maxPrice = Math.max(...sorted.map((line) => line.high));
@@ -144,7 +146,7 @@ export function KLineChart({ lines, symbol, state = 'ready', mode = 'daily', per
 	}).join(' ');
 
 	return (
-		<div className={`kline-chart-wrap ${mode === 'intraday' ? 'intraday-chart' : 'daily-chart'}`}>
+		<div className={`kline-chart-wrap ${mode === 'intraday' ? 'intraday-chart' : 'daily-chart'}${compact ? ' compact' : ''}`}>
 			<svg className="kline-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${periodLabel}价格、涨跌幅和成交量图`}>
 				{percentTicks.map((tick) => {
 					const y = percentY(tick);

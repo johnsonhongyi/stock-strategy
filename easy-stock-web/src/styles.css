@@ -3080,6 +3080,10 @@ a:focus-visible {
 .kline-modal-error { display: flex; align-items: center; gap: 8px; margin: 14px 24px 0; padding: 10px 12px; border: 1px solid var(--theme-red-line, #efc4c7); border-radius: 8px; background: var(--theme-surface-soft, #fff6f6); color: var(--theme-red, #b23842); font-size: 12px; }
 .kline-chart-wrap { position: relative; min-height: 330px; padding: 14px 24px 4px; overflow-x: auto; }
 .kline-chart { display: block; width: 100%; min-width: 720px; height: auto; }
+.kline-chart-wrap.compact { min-height: 0; padding: 8px 10px 4px; overflow: hidden; }
+.kline-chart-wrap.compact .kline-chart { min-width: 0; }
+.kline-chart-wrap.compact .kline-chart-legend { display: none; }
+.kline-chart-placeholder.compact { min-height: 190px; margin: 8px 10px; }
 .kline-grid { stroke: var(--theme-subtle, #e8edf3); stroke-width: 1; }
 .kline-zero-grid { stroke: var(--theme-subtle, #aab9c9); stroke-width: 1.4; stroke-dasharray: 5 4; }
 .kline-divider { stroke: var(--theme-subtle, #dce5ee); stroke-width: 1; }

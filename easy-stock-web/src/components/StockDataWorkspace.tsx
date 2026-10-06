@@ -1,7 +1,8 @@
-import { Activity, BarChart3, Database, ExternalLink, LoaderCircle, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { Activity, Database, ExternalLink, LoaderCircle, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { BackendConfig, KLine, requestJSON } from '../lib/backend';
+import { BackendConfig, KLine, Quote, requestJSON } from '../lib/backend';
 import type { StockDirectoryData, StockDirectoryEntry } from '../lib/backend';
+import { KLineChart } from './KLineChart';
 import './stock-data.css';
 
 type Market = 'CN' | 'US' | 'CRYPTO';
@@ -44,7 +45,44 @@ const usNames: Record<string, string> = {
 };
 const keyOf = (stock: StockDataRow) => `${stock.market}:${stock.symbol}`;
 const formatPrice = (value?: number) => value && Number.isFinite(value) ? value.toFixed(2) : '--';
+const formatSignedPercent = (value?: number) => value == null || !Number.isFinite(value) ? '--' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
 const normalizeSymbol = (value: string) => value.trim().toUpperCase().split(/[./:_-]/)[0];
+
+function dailyChangePercent(lines: KLine[], index: number) {
+	const current = lines[index];
+	if (current.change_percent != null && Number.isFinite(current.change_percent)) return current.change_percent;
+	const previousClose = current.previous_close || lines[index - 1]?.close || 0;
+	return previousClose > 0 ? ((current.close / previousClose) - 1) * 100 : undefined;
+}
+
+function summarizeDailyBars(lines: KLine[], stock: StockDataRow) {
+	const sorted = [...lines].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+	const latest = sorted.at(-1);
+	const fiveDayBase = sorted[Math.max(0, sorted.length - 6)];
+	const recent20 = sorted.slice(-20);
+	const minLow = recent20.length ? Math.min(...recent20.map((line) => line.low)) : 0;
+	const maxHigh = recent20.length ? Math.max(...recent20.map((line) => line.high)) : 0;
+	const return5 = latest && fiveDayBase && fiveDayBase.close > 0 && sorted.length > 1
+		? ((latest.close / fiveDayBase.close) - 1) * 100
+		: undefined;
+	const position20 = latest && maxHigh > minLow
+		? Math.max(0, Math.min(100, ((latest.close - minLow) / (maxHigh - minLow)) * 100))
+		: undefined;
+	let maxLimitStreak: number | undefined;
+	if (stock.market === 'CN') {
+		const code = normalizeSymbol(stock.symbol);
+		const threshold = /^(4|8|92)/.test(code) ? 29.5 : /^(300|301|302|303|688|689)/.test(code) ? 19.5 : 9.5;
+		let streak = 0;
+		maxLimitStreak = 0;
+		const start = Math.max(0, sorted.length - 20);
+		for (let index = start; index < sorted.length; index += 1) {
+			const limitUp = (dailyChangePercent(sorted, index) || 0) >= threshold;
+			streak = limitUp ? streak + 1 : 0;
+			maxLimitStreak = Math.max(maxLimitStreak, streak);
+		}
+	}
+	return { latest, return5, position20, maxLimitStreak };
+}
 
 function loadDirectoryCache(): { cachedAt: number; stocks: StockDirectoryEntry[] } {
 	try {
@@ -66,6 +104,7 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 	const [query, setQuery] = useState('');
 	const [selectedKey, setSelectedKey] = useState('');
 	const [bars, setBars] = useState<KLine[]>([]);
+	const [quote, setQuote] = useState<Quote | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [barsLoading, setBarsLoading] = useState(false);
 	const [busyKey, setBusyKey] = useState('');
@@ -144,21 +183,32 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 		bars: stocks.reduce((sum, stock) => sum + stock.bar_count, 0),
 		latest: (() => { const dates = stocks.map((stock) => stock.latest_date || '').filter(Boolean).sort(); return dates[dates.length - 1] || '--'; })(),
 	}), [stocks]);
+	const snapshot = useMemo(() => selected ? summarizeDailyBars(bars, selected) : null, [bars, selected]);
+	const quoteChange = quote?.change_percent ?? (snapshot?.latest ? dailyChangePercent([...bars].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime()), bars.length - 1) : undefined);
+	const quotePrice = quote?.price || snapshot?.latest?.close || selected?.latest_close;
 
 	useEffect(() => {
 		if (!selected) {
 			setBars([]);
+			setQuote(null);
 			setBarsError('');
 			return;
 		}
 		if (!config) return;
 		let cancelled = false;
+		setBars([]);
+		setQuote(null);
 		setBarsLoading(true);
 		setBarsError('');
-		void requestJSON<{ data: KLine[] }>(config, `/api/v1/market-data/stocks/${selected.market}/${encodeURIComponent(selected.symbol)}/bars?limit=60`)
+		void requestJSON<{ data: KLine[] }>(config, `/api/v1/quotes/kline?symbol=${encodeURIComponent(selected.symbol)}&market=${selected.market}&period=day&limit=60`)
 			.then((payload) => { if (!cancelled) setBars(payload.data || []); })
-			.catch((loadError) => { if (!cancelled) setBarsError(loadError instanceof Error ? loadError.message : '读取日线失败'); })
+			.catch((loadError) => { if (!cancelled) setBarsError(loadError instanceof Error ? loadError.message : '统一行情日线暂不可用'); })
 			.finally(() => { if (!cancelled) setBarsLoading(false); });
+		if (selected.market === 'CN') {
+			void requestJSON<{ data: Quote[] }>(config, `/api/v1/quotes/realtime?symbols=${encodeURIComponent(selected.symbol)}`)
+				.then((payload) => { if (!cancelled) setQuote(payload.data?.[0] || null); })
+				.catch(() => { if (!cancelled) setQuote(null); });
+		}
 		return () => { cancelled = true; };
 	}, [config, selected?.market, selected?.symbol, dataVersion]);
 
@@ -268,7 +318,7 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 						<thead><tr><th>标的</th><th>市场</th><th>本地日线</th><th>最新日期 / 收盘</th><th>更新来源</th><th>操作</th></tr></thead>
 						<tbody>
 							{visibleStocks.map((stock) => <tr key={keyOf(stock)} className={selected && keyOf(selected) === keyOf(stock) ? 'selected' : ''} onClick={() => setSelectedKey(keyOf(stock))}>
-								<td><strong>{stock.name || stock.symbol}</strong><small>{stock.symbol}</small></td>
+							<td><strong>{stock.name || stock.symbol}</strong><button type="button" className="stock-data-symbol-link" aria-label={`查看 ${marketNames[stock.market]} ${stock.name || stock.symbol} 的日 K 行情`} onClick={(event) => { event.stopPropagation(); setSelectedKey(keyOf(stock)); }}>{stock.symbol}</button></td>
 								<td>{marketNames[stock.market]}</td>
 								<td>{stock.bar_count.toLocaleString()} 条</td>
 								<td>{stock.latest_date || '--'} / {formatPrice(stock.latest_close)}</td>
@@ -285,16 +335,28 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 				</div>
 				<aside className="stock-data-detail">
 					{selected ? <>
-						<div className="stock-data-detail-heading"><div><span>{marketNames[selected.market]} · {selected.symbol}</span><h3>{selected.name || selected.symbol}</h3><small>{selected.bar_count} 条日线 · {selected.first_date || '--'} 至 {selected.latest_date || '--'}</small></div><BarChart3 size={18} /></div>
+						<div className="stock-data-detail-heading">
+							<div><span>{marketNames[selected.market]} · 个股日 K</span><h3>{quote?.name || selected.name || selected.symbol}</h3><small>{selected.symbol} · {selected.bar_count} 条已持久化日线</small></div>
+							<div className={`stock-data-quote ${quoteChange == null ? '' : quoteChange >= 0 ? 'up' : 'down'}`}><strong>{formatPrice(quotePrice)}</strong><em>{formatSignedPercent(quoteChange)}</em><small>{quote ? `实时行情 · ${quote.meta.source || '统一接口'}` : snapshot?.latest ? `最新收盘 · ${snapshot.latest.meta.source || '本地缓存'}` : '等待行情数据'}</small></div>
+						</div>
 						<div className="stock-data-detail-actions"><button type="button" onClick={() => onOpenAnalysis(selected)}><Activity size={14} />个股分析</button><button type="button" onClick={() => onOpenStrategy(selected)}><ExternalLink size={14} />策略研判</button><button type="button" className="danger" disabled={busyKey === keyOf(selected)} onClick={() => void clearCache(selected)}><Trash2 size={14} />清空日线</button></div>
 						{barsError && <p className="stock-data-message error">{barsError}</p>}
-						<div className="stock-data-bars-wrap">
-							<table className="stock-data-bars"><thead><tr><th>日期</th><th>开</th><th>高</th><th>低</th><th>收</th><th>成交量</th></tr></thead><tbody>
-								{[...bars].reverse().map((bar) => <tr key={`${bar.time}-${bar.symbol}`}><td>{bar.time.slice(0, 10)}</td><td>{formatPrice(bar.open)}</td><td>{formatPrice(bar.high)}</td><td>{formatPrice(bar.low)}</td><td>{formatPrice(bar.close)}</td><td>{Math.round(bar.volume).toLocaleString()}</td></tr>)}
-								{!barsLoading && bars.length === 0 && <tr><td colSpan={6} className="stock-data-empty">暂无本地日线；加入名单后由盘后任务补齐。</td></tr>}
-							</tbody></table>
-							{barsLoading && <div className="stock-data-loading"><LoaderCircle size={16} className="stock-data-spin" />读取日线明细…</div>}
+						<KLineChart lines={bars} symbol={selected.symbol} state={barsLoading ? 'loading' : barsError ? 'error' : 'ready'} mode="daily" periodLabel="日K" compact />
+						<div className="stock-snapshot stock-data-snapshot">
+							<div><span>近5日</span><strong className={snapshot?.return5 == null ? '' : snapshot.return5 >= 0 ? 'up' : 'down'}>{formatSignedPercent(snapshot?.return5)}</strong></div>
+							<div><span>20日位置</span><strong>{snapshot?.position20 == null ? '--' : `${snapshot.position20.toFixed(0)}%`}</strong></div>
+							<div><span>最高连板</span><strong>{snapshot?.maxLimitStreak ? `${snapshot.maxLimitStreak}` : '--'}</strong></div>
 						</div>
+						<details className="stock-data-bars-detail">
+							<summary>日线明细 · {bars.length || selected.bar_count} 条</summary>
+							<div className="stock-data-bars-wrap">
+								<table className="stock-data-bars"><thead><tr><th>日期</th><th>开</th><th>高</th><th>低</th><th>收</th><th>成交量</th></tr></thead><tbody>
+									{[...bars].reverse().map((bar) => <tr key={`${bar.time}-${bar.symbol}`}><td>{bar.time.slice(0, 10)}</td><td>{formatPrice(bar.open)}</td><td>{formatPrice(bar.high)}</td><td>{formatPrice(bar.low)}</td><td>{formatPrice(bar.close)}</td><td>{Math.round(bar.volume).toLocaleString()}</td></tr>)}
+									{!barsLoading && bars.length === 0 && <tr><td colSpan={6} className="stock-data-empty">暂无可用日线；统一行情接口会优先读本地缓存。</td></tr>}
+								</tbody></table>
+								{barsLoading && <div className="stock-data-loading"><LoaderCircle size={16} className="stock-data-spin" />读取日线明细…</div>}
+							</div>
+						</details>
 					</> : <div className="stock-data-no-selection"><Database size={22} /><strong>选择标的查看本地行情</strong><span>新增标的会在下次盘后更新任务中进行初次回补。</span></div>}
 				</aside>
 			</div>
