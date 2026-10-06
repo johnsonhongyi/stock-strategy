@@ -1,6 +1,7 @@
 """dayang.py + P23预期止损测试(2026-09-30)"""
+import os
 import sys
-sys.path.insert(0, "/home/hatch/workspace/easy-stock-service")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dayang import dayang_signal, dayang_events
 
 ok = 0

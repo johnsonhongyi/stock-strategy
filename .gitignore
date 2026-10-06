@@ -1,0 +1,6 @@
+# Runtime-only strategy state and user data; keep outside Git history.
+/easy-stock-service/data/
+/easy-stock-service/logs/
+/easy-stock-service/reviews/
+/easy-stock-service/positions_real.json
+/easy-stock-service/.env

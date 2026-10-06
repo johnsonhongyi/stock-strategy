@@ -2,8 +2,9 @@
 场景: 1换仓成功 2不同板块拒绝 3次日龙头证伪卖出换仓腿 4偏离过高不追
       5数据缺失不动 6复牌一字陷阱不追 7a早盘下杀15分钟收复持有 7b未收复卖出
 全程 dry=True,不写账本不记日志。"""
+import os
 import sys
-sys.path.insert(0, "/home/hatch/workspace/easy-stock-service")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import copy
 import paper_trade as pt
 import grid_t
