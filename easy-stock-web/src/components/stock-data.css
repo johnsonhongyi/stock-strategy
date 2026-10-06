@@ -45,6 +45,7 @@
 .stock-data-symbol-link:hover, .stock-data-symbol-link:focus-visible { color: var(--blue); text-decoration: underline; text-underline-offset: 2px; }
 .stock-data-state { display: inline-flex; width: fit-content; padding: 3px 6px; border-radius: 5px; background: var(--surface-soft, #f3f5f7); color: var(--muted); font-size: 9px; }
 .stock-data-state.tracked { background: var(--green-soft, #eaf7f0); color: var(--green, #14865f); }
+.stock-data-state.empty { background: var(--red-soft, #fff0f0); color: var(--red, #b23740); }
 .stock-data-source { display: block; max-width: 110px; overflow: hidden; margin-top: 3px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; }
 .stock-data-row-actions { display: flex; gap: 4px; }
 .stock-data-row-actions button { display: grid; width: 27px; height: 27px; place-items: center; border: 1px solid var(--line-soft); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }

@@ -10,7 +10,7 @@
 """
 import market_cache
 import data_store
-import json, os, re, sqlite3, sys, time, urllib.request, datetime
+import functools, json, math, os, re, sqlite3, sys, time, urllib.request, datetime
 
 SVC = os.path.dirname(os.path.abspath(__file__))
 DB = data_store.DB_PATH
@@ -37,14 +37,7 @@ def bulk_allowed(source):
 
 def db():
     c = data_store.connect()
-    c.execute("""CREATE TABLE IF NOT EXISTS daily_bars(
-        code TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL,
-        prev_close REAL, volume REAL, amount REAL, source TEXT, market TEXT DEFAULT 'CN',
-        PRIMARY KEY(code, date))""")
-    columns = {row[1] for row in c.execute("PRAGMA table_info(daily_bars)").fetchall()}
-    if "market" not in columns:
-        c.execute("ALTER TABLE daily_bars ADD COLUMN market TEXT DEFAULT 'CN'")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_bars_code ON daily_bars(code)")
+    data_store.ensure_daily_bars_schema(c)
     c.execute("""CREATE TABLE IF NOT EXISTS stock_tracking(
         market TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
         enabled INTEGER NOT NULL DEFAULT 1, source TEXT NOT NULL DEFAULT 'manual',
@@ -64,8 +57,7 @@ def seeded(c, code):
 
 def mark_seeded(c, code):
     c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
-              ("seeded_" + code, datetime.date.today().isoformat()))
-    c.commit()
+              ("seeded_" + code, datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).date().isoformat()))
 
 def to_sina(code):
     c = code.strip()
@@ -123,11 +115,76 @@ def api(path, force_refresh=False):
     with market_cache.urlopen(req, timeout=30, force_refresh=force_refresh) as r:
         return json.loads(r.read().decode("utf-8", "ignore"))
 
+def _latest_expected_session_cn():
+    from trading_calendar import is_trading_day, prev_trading_day, today_str
+    local_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+    expected = today_str("CN")
+    if local_now.strftime("%H:%M") < "15:30" or not is_trading_day(expected, "CN"):
+        expected = prev_trading_day(expected, market="CN")
+    return expected
+
+@functools.lru_cache(maxsize=32)
+def _recent_expected_cn_sessions(expected_date, limit=20):
+    from trading_calendar import prev_trading_day
+    sessions = [expected_date]
+    while len(sessions) < limit:
+        sessions.append(prev_trading_day(sessions[-1], market="CN"))
+    return tuple(sessions)
+
+def _repair_previous_closes(c, code):
+    rows = c.execute("SELECT date,close,prev_close FROM daily_bars WHERE market='CN' AND code=? ORDER BY date", (code,)).fetchall()
+    previous_close = None
+    for day, close, stored_previous in rows:
+        if previous_close and (stored_previous is None or stored_previous <= 0 or
+                               abs(float(stored_previous) - previous_close) > max(1e-8, abs(previous_close) * 1e-8)):
+            c.execute("UPDATE daily_bars SET prev_close=? WHERE market='CN' AND code=? AND date=?",
+                      (previous_close, code, day))
+        previous_close = float(close) if close is not None and close > 0 else None
+
+def _history_needs_repair(c, code, expected_date=None):
+    row = c.execute("""SELECT COUNT(*),MIN(date),MAX(date),SUM(CASE WHEN open IS NULL OR high IS NULL OR low IS NULL OR close IS NULL
+        OR open<=0 OR high<low OR low<=0 OR close<=0 OR high<open OR high<close OR low>open OR low>close
+        OR date IS NULL OR length(date)!=10 THEN 1 ELSE 0 END) FROM daily_bars WHERE market='CN' AND code=?""", (code,)).fetchone()
+    count, first, latest, invalid = row
+    if not count or invalid:
+        return True
+    if expected_date and latest != expected_date:
+        return True
+    if expected_date:
+        stored = {item[0] for item in c.execute(
+            "SELECT date FROM daily_bars WHERE market='CN' AND code=? AND date>=?", (code, min(first, expected_date))
+        ).fetchall()}
+        for session in _recent_expected_cn_sessions(expected_date):
+            if session >= first and session not in stored:
+                return True
+    return False
+
+def _validated_history_bar(bar):
+    day = str(bar.get("time") or "")[:10]
+    try:
+        if datetime.date.fromisoformat(day).isoformat() != day:
+            return None
+        values = [float(bar[name]) for name in ("open", "high", "low", "close")]
+        volume = float(bar.get("volume") or 0)
+        amount = float(bar.get("amount") or 0)
+        previous = float(bar["previous_close"]) if bar.get("previous_close") is not None else None
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in values + [volume, amount]):
+        return None
+    opened, high, low, close = values
+    if min(values) <= 0 or high < max(opened, close, low) or low > min(opened, close) or volume < 0 or amount < 0:
+        return None
+    if previous is not None and (not math.isfinite(previous) or previous <= 0):
+        previous = None
+    return day, opened, high, low, close, previous, volume, amount
+
 def _fetch_history(codes):
     """东财批量拉历史日K写入库(30只/批,批间隔3秒)。返回写入根数。"""
     c = db()
     tk = token()
     total = 0
+    expected_date = _latest_expected_session_cn()
     for i in range(0, len(codes), 30):
         batch = codes[i:i+30]
         syms = ",".join(to_sina(x) for x in batch)
@@ -135,24 +192,39 @@ def _fetch_history(codes):
             d = api("/api/v1/quotes/kline/batch?symbols=%s&period=day&limit=240&token=%s" % (syms, tk),
                     force_refresh=True)
             n = 0
+            received = set()
             for code6, bars in d.get("data", {}).items():
-                code = re.sub(r"\D", "", code6)[:6]
+                code = re.sub(r"\D", "", str(code6))[-6:]
+                if code not in batch:
+                    continue
                 for b in bars or []:
-                    day = (b.get("time") or "")[:10]
-                    if not day: continue
-                    c.execute("""INSERT OR IGNORE INTO daily_bars
-                        (code,date,open,high,low,close,prev_close,volume,amount,source)
-                        VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                        (code, day, b.get("open"), b.get("high"), b.get("low"),
-                         b.get("close"), b.get("previous_close"), b.get("volume"),
-                         b.get("amount"), "backfill"))
+                    parsed = _validated_history_bar(b)
+                    if not parsed:
+                        continue
+                    day, opened, high, low, close, previous, volume, amount = parsed
+                    c.execute("""INSERT INTO daily_bars
+                        (code,date,open,high,low,close,prev_close,volume,amount,source,market)
+                        VALUES(?,?,?,?,?,?,?,?,?,'backfill','CN')
+                        ON CONFLICT(market,code,date) DO UPDATE SET
+                            open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,
+                            prev_close=COALESCE(excluded.prev_close,daily_bars.prev_close),
+                            volume=excluded.volume,amount=excluded.amount,source=excluded.source""",
+                        (code, day, opened, high, low, close, previous, volume, amount))
                     n += 1
+                    received.add(code)
             c.commit()
             print("batch %d-%d ok bars=%d" % (i, i+len(batch), n), flush=True)
             total += n
-            for x in batch:
-                mark_seeded(c, x)
+            for code in received:
+                _repair_previous_closes(c, code)
+                if not _history_needs_repair(c, code, expected_date):
+                    mark_seeded(c, code)
+            c.commit()
+            missing = [code for code in batch if code not in received or _history_needs_repair(c, code, expected_date)]
+            if missing:
+                print("history incomplete; retry next run: %s" % ",".join(missing), flush=True)
         except Exception as e:
+            c.rollback()
             print("batch %d FAIL %s" % (i, str(e)[:100]), flush=True)
         time.sleep(3)  # 降频,不密集
     c.close()
@@ -164,7 +236,8 @@ def backfill():
     if not uni:
         print("universe empty"); return
     c = db()
-    todo = [x for x in uni if not seeded(c, x)]
+    expected_date = _latest_expected_session_cn()
+    todo = [x for x in uni if not seeded(c, x) or _history_needs_repair(c, x, expected_date)]
     c.close()
     print("universe=%d todo=%d" % (len(uni), len(todo)))
     if not todo:
@@ -180,7 +253,7 @@ def get_bars(code, start=None, end=None):
     首次缺数据时补齐并落库;已有数据只读本地,不按读取次数请求上游。"""
     ensure_bars(code, start=start, end=end)
     c = db()
-    q = "SELECT date,open,high,low,close,prev_close,volume,amount FROM daily_bars WHERE code=?"
+    q = "SELECT date,open,high,low,close,prev_close,volume,amount FROM daily_bars WHERE market='CN' AND code=?"
     args = [code]
     if start:
         q += " AND date>=?"; args.append(start)
@@ -195,7 +268,7 @@ def get_bars(code, start=None, end=None):
 def coverage(code):
     """返回 (最早日,最晚日,根数),无数据返回 (None,None,0)"""
     c = db()
-    r = c.execute("SELECT MIN(date),MAX(date),COUNT(*) FROM daily_bars WHERE code=?",
+    r = c.execute("SELECT MIN(date),MAX(date),COUNT(*) FROM daily_bars WHERE market='CN' AND code=?",
                   (code,)).fetchone()
     c.close()
     return r if r[2] else (None, None, 0)
@@ -282,36 +355,53 @@ def append_today():
     today = _now_sh.date().isoformat()
     c = db()
     uni = get_universe()
-    todo = [x for x in uni if not c.execute(
-        "SELECT 1 FROM daily_bars WHERE code=? AND date=?", (x, today)).fetchone()]
-    if not todo:
-        print(today, "all done"); c.close(); return
-    # 新票首次出现:先给它打底一次历史(幂等:seeded标记防重复)
-    new_codes = [x for x in todo if not seeded(c, x)]
-    if new_codes:
-        print("new codes, backfill first:", new_codes)
+    incomplete = [x for x in uni if _history_needs_repair(c, x, today)]
+    if incomplete:
+        print("incomplete CN history, attempting backfill:", incomplete)
         c.close()
         backfill()
         c = db()
-        todo = [x for x in uni if not c.execute(
-            "SELECT 1 FROM daily_bars WHERE code=? AND date=?", (x, today)).fetchone()]
+    todo = [x for x in uni if not c.execute(
+        "SELECT 1 FROM daily_bars WHERE market='CN' AND code=? AND date=? AND open>0 AND high>=low AND low>0 AND close>0 AND high>=open AND high>=close AND low<=open AND low<=close",
+        (x, today)).fetchone()]
+    if not todo:
+        print(today, "all tracked symbols have valid daily bars")
+        c.close()
+        return
     snap = sina_snapshot(todo, force_refresh=True)
     n = 0
     ticks = []
+    updated = set()
     for code in todo:
         b = snap.get(code)
-        if not b or b["date"] != today or b["close"] <= 0:
+        if not b or b["date"] != today:
             continue  # 快照日期不对/停牌就不写,明天再说
+        parsed = _validated_history_bar({"time": b["date"], "open": b["open"], "high": b["high"],
+            "low": b["low"], "close": b["close"], "previous_close": b["prev_close"],
+            "volume": b["volume"], "amount": b["amount"]})
+        if not parsed:
+            continue
+        _, opened, high, low, close, previous, volume, amount = parsed
         ticks.append(b["ticktime"])
-        c.execute("""INSERT OR IGNORE INTO daily_bars
-            (code,date,open,high,low,close,prev_close,volume,amount,source)
-            VALUES(?,?,?,?,?,?,?,?,?,?)""",
-            (code, today, b["open"], b["high"], b["low"], b["close"],
-             b["prev_close"], b["volume"], b["amount"], "sina_push"))
+        c.execute("""INSERT INTO daily_bars
+            (code,date,open,high,low,close,prev_close,volume,amount,source,market)
+            VALUES(?,?,?,?,?,?,?,?,?,?,'CN')
+            ON CONFLICT(market,code,date) DO UPDATE SET
+                open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,
+                prev_close=excluded.prev_close,volume=excluded.volume,amount=excluded.amount,source=excluded.source""",
+            (code, today, opened, high, low, close, previous, volume, amount, "sina_push"))
         n += 1
+        updated.add(code)
+    for code in updated:
+        _repair_previous_closes(c, code)
     c.commit(); c.close()
     tick_range = ("tick %s~%s" % (min(ticks), max(ticks))) if ticks else "no ticks"
-    print(today, "appended bars=%d/%d %s" % (n, len(todo), tick_range))
+    c = db()
+    unresolved = [x for x in uni if _history_needs_repair(c, x, today)]
+    c.close()
+    print(today, "appended bars=%d/%d unresolved=%d %s" % (n, len(todo), len(unresolved), tick_range))
+    if unresolved:
+        print("still incomplete; next scheduled run will retry: %s" % ",".join(unresolved), flush=True)
 
 if __name__ == "__main__":
     if "--backfill" in sys.argv: backfill()

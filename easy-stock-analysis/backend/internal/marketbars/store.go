@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -50,9 +51,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("configure market data database: %w", err)
 	}
 	for _, statement := range []string{
-		"CREATE TABLE IF NOT EXISTS daily_bars (code TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, prev_close REAL, volume REAL, amount REAL, source TEXT, market TEXT DEFAULT 'CN', PRIMARY KEY(code, date))",
-		"CREATE INDEX IF NOT EXISTS idx_bars_code ON daily_bars(code)",
-		"CREATE INDEX IF NOT EXISTS idx_bars_market_code_date ON daily_bars(UPPER(code), UPPER(COALESCE(NULLIF(market,''),'CN')), date DESC)",
+		"CREATE TABLE IF NOT EXISTS daily_bars (code TEXT NOT NULL, date TEXT NOT NULL, open REAL, high REAL, low REAL, close REAL, prev_close REAL, volume REAL, amount REAL, source TEXT, market TEXT NOT NULL DEFAULT 'CN', PRIMARY KEY(market, code, date))",
 		"CREATE TABLE IF NOT EXISTS stock_tracking (market TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, source TEXT NOT NULL DEFAULT 'manual', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(market,code))",
 		"CREATE INDEX IF NOT EXISTS idx_stock_tracking_enabled ON stock_tracking(market,enabled,code)",
 		"CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)",
@@ -68,17 +67,21 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	hasMarket := false
+	primaryKeyOrdinals := make(map[int]string, 3)
 	for columns.Next() {
-		var cid, notNull, primaryKey int
+		var cid, notNull, primaryOrdinal int
 		var name, dataType string
 		var defaultValue sql.NullString
-		if err := columns.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+		if err := columns.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryOrdinal); err != nil {
 			columns.Close()
 			_ = db.Close()
 			return nil, err
 		}
 		if strings.EqualFold(name, "market") {
 			hasMarket = true
+		}
+		if primaryOrdinal > 0 {
+			primaryKeyOrdinals[primaryOrdinal] = name
 		}
 	}
 	if err := columns.Err(); err != nil {
@@ -91,6 +94,21 @@ func Open(path string) (*Store, error) {
 		if _, err := db.Exec("ALTER TABLE daily_bars ADD COLUMN market TEXT DEFAULT 'CN'"); err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("add market column to daily bars: %w", err)
+		}
+	}
+	if !hasCompositeDailyBarKey(primaryKeyOrdinals) {
+		if err := migrateDailyBarsMarketKey(db); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("migrate daily bars market key: %w", err)
+		}
+	}
+	for _, statement := range []string{
+		"CREATE INDEX IF NOT EXISTS idx_bars_code ON daily_bars(code)",
+		"CREATE INDEX IF NOT EXISTS idx_bars_market_code_date ON daily_bars(UPPER(code), UPPER(COALESCE(NULLIF(market,''),'CN')), date DESC)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("initialize daily bars index: %w", err)
 		}
 	}
 	return &Store{db: db}, nil
@@ -111,7 +129,14 @@ func (s *Store) ReadDaily(ctx context.Context, symbol string, requestedMarket st
 	if limit <= 0 {
 		limit = 120
 	}
-	rows, err := s.db.QueryContext(ctx, "SELECT date,open,high,low,close,prev_close,volume,amount,source FROM daily_bars WHERE UPPER(code)=? AND UPPER(COALESCE(NULLIF(market,''),'CN'))=? ORDER BY date DESC LIMIT ?", code, market, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT bars.date,bars.open,bars.high,bars.low,bars.close,
+		COALESCE(bars.prev_close,(SELECT prior.close FROM daily_bars prior
+			WHERE UPPER(prior.code)=UPPER(bars.code)
+			AND UPPER(COALESCE(NULLIF(prior.market,''),'CN'))=UPPER(COALESCE(NULLIF(bars.market,''),'CN'))
+			AND prior.date<bars.date ORDER BY prior.date DESC LIMIT 1),0),
+		bars.volume,bars.amount,bars.source FROM daily_bars bars
+		WHERE UPPER(bars.code)=? AND UPPER(COALESCE(NULLIF(bars.market,''),'CN'))=?
+		ORDER BY bars.date DESC LIMIT ?`, code, market, limit)
 	if err != nil {
 		return nil, false, err
 	}
@@ -121,9 +146,23 @@ func (s *Store) ReadDaily(ctx context.Context, symbol string, requestedMarket st
 	for rows.Next() {
 		var date string
 		var line foundation.KLine
+		var open, high, low, close, previousClose, volume, amount sql.NullFloat64
 		var source sql.NullString
-		if err := rows.Scan(&date, &line.Open, &line.High, &line.Low, &line.Close, &line.PreviousClose, &line.Volume, &line.Amount, &source); err != nil {
+		if err := rows.Scan(&date, &open, &high, &low, &close, &previousClose, &volume, &amount, &source); err != nil {
 			return nil, false, err
+		}
+		if !open.Valid || !high.Valid || !low.Valid || !close.Valid || open.Float64 <= 0 || high.Float64 < low.Float64 || low.Float64 <= 0 || close.Float64 <= 0 || high.Float64 < open.Float64 || high.Float64 < close.Float64 || low.Float64 > open.Float64 || low.Float64 > close.Float64 {
+			continue
+		}
+		line.Open, line.High, line.Low, line.Close = open.Float64, high.Float64, low.Float64, close.Float64
+		if previousClose.Valid {
+			line.PreviousClose = previousClose.Float64
+		}
+		if volume.Valid {
+			line.Volume = volume.Float64
+		}
+		if amount.Valid {
+			line.Amount = amount.Float64
 		}
 		parsed, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(date), location)
 		if err != nil {
@@ -154,6 +193,14 @@ func (s *Store) ReadDaily(ctx context.Context, symbol string, requestedMarket st
 	for i := range reversed {
 		lines[len(reversed)-1-i] = reversed[i]
 	}
+	for i := range lines {
+		if lines[i].PreviousClose <= 0 && i > 0 {
+			lines[i].PreviousClose = lines[i-1].Close
+		}
+		if lines[i].PreviousClose > 0 {
+			lines[i].ChangePercent = (lines[i].Close/lines[i].PreviousClose - 1) * 100
+		}
+	}
 	return lines, true, nil
 }
 
@@ -168,7 +215,7 @@ func (s *Store) UpsertDaily(ctx context.Context, symbol string, requestedMarket 
 	}
 	defer tx.Rollback()
 	for _, line := range lines {
-		if line.Time.IsZero() {
+		if line.Time.IsZero() || !validDailyBar(line) {
 			continue
 		}
 		date := line.Time.In(time.FixedZone("Asia/Shanghai", 8*60*60)).Format("2006-01-02")
@@ -182,6 +229,17 @@ func (s *Store) UpsertDaily(ctx context.Context, symbol string, requestedMarket 
 		}
 	}
 	return tx.Commit()
+}
+
+func validDailyBar(line foundation.KLine) bool {
+	for _, value := range []float64{line.Open, line.High, line.Low, line.Close, line.PreviousClose, line.Volume, line.Amount} {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return false
+		}
+	}
+	return line.Open > 0 && line.Low > 0 && line.Close > 0 && line.High >= line.Low &&
+		line.High >= line.Open && line.High >= line.Close && line.Low <= line.Open && line.Low <= line.Close &&
+		line.PreviousClose >= 0 && line.Volume >= 0 && line.Amount >= 0
 }
 
 func (s *Store) resolve(ctx context.Context, symbol string, requestedMarket string) (string, string, error) {

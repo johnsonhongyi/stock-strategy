@@ -280,6 +280,37 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 		}
 	};
 
+	const refreshBars = async (stock: StockDataRow) => {
+		if (!config) return;
+		const isSelected = selected != null && keyOf(selected) === keyOf(stock);
+		setBusyKey(keyOf(stock));
+		if (isSelected) {
+			setBarsLoading(true);
+			setBarsError('');
+		}
+		setError('');
+		setNotice('');
+		try {
+			const payload = await requestJSON<{ data: KLine[] }>(config,
+				`/api/v1/quotes/kline?symbol=${encodeURIComponent(stock.symbol)}&market=${stock.market}&period=day&limit=240`,
+				{ headers: { 'X-Stock-Cache-Refresh': '1' } });
+			const refreshed = payload.data || [];
+			if (isSelected) setBars(refreshed);
+			const stale = refreshed.some((line) => line.meta?.stale);
+			setNotice(stale
+				? `${stock.symbol} 当前只能返回回退数据，已保留本地结果；后续任务会继续检查并回补。`
+				: `${stock.symbol} 手动更新完成，统一行情底座返回 ${refreshed.length} 条日线。`);
+			await reload();
+		} catch (refreshError) {
+			const message = refreshError instanceof Error ? refreshError.message : '手动回补失败';
+			if (isSelected) setBarsError(message);
+			else setError(message);
+		} finally {
+			if (isSelected) setBarsLoading(false);
+			setBusyKey('');
+		}
+	};
+
 	return <main className="stock-data-workspace">
 		<section className="stock-data-summary">
 			<div><span>本地行情标的</span><strong>{stocks.length}</strong><small>跨市场持久化缓存</small></div>
@@ -322,8 +353,9 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 								<td>{marketNames[stock.market]}</td>
 								<td>{stock.bar_count.toLocaleString()} 条</td>
 								<td>{stock.latest_date || '--'} / {formatPrice(stock.latest_close)}</td>
-								<td><span className={`stock-data-state ${stock.tracked ? 'tracked' : ''}`}>{stock.tracked ? '自动更新' : '仅缓存'}</span><small className="stock-data-source">{stock.latest_source || stock.tracking_source || '—'}</small></td>
+								<td><span className={`stock-data-state ${stock.bar_count === 0 ? 'empty' : stock.tracked ? 'tracked' : ''}`}>{stock.bar_count === 0 ? '待回补' : stock.tracked ? '自动更新' : '仅缓存'}</span><small className="stock-data-source">{stock.latest_source || stock.tracking_source || '—'}</small></td>
 								<td><div className="stock-data-row-actions">
+									<button type="button" title={stock.bar_count === 0 ? '手动回补日线' : '手动更新日线'} aria-label={`${stock.bar_count === 0 ? '回补' : '更新'} ${stock.symbol} 日线`} disabled={!config || busyKey === keyOf(stock)} onClick={(event) => { event.stopPropagation(); void refreshBars(stock); }}><RefreshCw size={14} className={busyKey === keyOf(stock) ? 'stock-data-spin' : ''} /></button>
 									<button type="button" title={stock.tracked ? '移出自动更新名单' : '加入自动更新名单'} aria-label={stock.tracked ? `移出 ${stock.symbol} 更新名单` : `加入 ${stock.symbol} 更新名单`} disabled={busyKey === keyOf(stock)} onClick={(event) => { event.stopPropagation(); void setTracking(stock, !stock.tracked); }}>{stock.tracked ? <Trash2 size={14} /> : <Plus size={14} />}</button>
 									<button type="button" title="打开系统个股分析" aria-label={`分析 ${stock.symbol}`} onClick={(event) => { event.stopPropagation(); onOpenAnalysis(stock); }}><ExternalLink size={14} /></button>
 								</div></td>
@@ -339,7 +371,7 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 							<div><span>{marketNames[selected.market]} · 个股日 K</span><h3>{quote?.name || selected.name || selected.symbol}</h3><small>{selected.symbol} · {selected.bar_count} 条已持久化日线</small></div>
 							<div className={`stock-data-quote ${quoteChange == null ? '' : quoteChange >= 0 ? 'up' : 'down'}`}><strong>{formatPrice(quotePrice)}</strong><em>{formatSignedPercent(quoteChange)}</em><small>{quote ? `实时行情 · ${quote.meta.source || '统一接口'}` : snapshot?.latest ? `最新收盘 · ${snapshot.latest.meta.source || '本地缓存'}` : '等待行情数据'}</small></div>
 						</div>
-						<div className="stock-data-detail-actions"><button type="button" onClick={() => onOpenAnalysis(selected)}><Activity size={14} />个股分析</button><button type="button" onClick={() => onOpenStrategy(selected)}><ExternalLink size={14} />策略研判</button><button type="button" className="danger" disabled={busyKey === keyOf(selected)} onClick={() => void clearCache(selected)}><Trash2 size={14} />清空日线</button></div>
+						<div className="stock-data-detail-actions"><button type="button" disabled={!config || busyKey === keyOf(selected)} onClick={() => void refreshBars(selected)}><RefreshCw size={14} className={busyKey === keyOf(selected) ? 'stock-data-spin' : ''} />{selected.bar_count === 0 ? '手动回补' : '手动更新'}</button><button type="button" onClick={() => onOpenAnalysis(selected)}><Activity size={14} />个股分析</button><button type="button" onClick={() => onOpenStrategy(selected)}><ExternalLink size={14} />策略研判</button><button type="button" className="danger" disabled={busyKey === keyOf(selected)} onClick={() => void clearCache(selected)}><Trash2 size={14} />清空日线</button></div>
 						{barsError && <p className="stock-data-message error">{barsError}</p>}
 						<KLineChart lines={bars} symbol={selected.symbol} state={barsLoading ? 'loading' : barsError ? 'error' : 'ready'} mode="daily" periodLabel="日K" compact />
 						<div className="stock-snapshot stock-data-snapshot">

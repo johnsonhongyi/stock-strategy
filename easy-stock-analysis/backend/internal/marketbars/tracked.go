@@ -29,7 +29,7 @@ func (s *Store) ListStocks(ctx context.Context, requestedMarket string) ([]Stock
 		COALESCE((SELECT latest.close FROM daily_bars latest WHERE UPPER(latest.code)=bars.code AND UPPER(COALESCE(NULLIF(latest.market,''),'CN'))=bars.market AND latest.date=bars.latest_date ORDER BY latest.rowid DESC LIMIT 1),0),
 		COALESCE((SELECT latest.source FROM daily_bars latest WHERE UPPER(latest.code)=bars.code AND UPPER(COALESCE(NULLIF(latest.market,''),'CN'))=bars.market AND latest.date=bars.latest_date ORDER BY latest.rowid DESC LIMIT 1),'')
 		FROM (SELECT UPPER(COALESCE(NULLIF(market,''),'CN')) AS market,UPPER(code) AS code,COUNT(*) AS bar_count,MIN(date) AS first_date,MAX(date) AS latest_date
-		FROM daily_bars GROUP BY 1,2) bars`
+		FROM daily_bars WHERE open>0 AND high>=low AND low>0 AND close>0 AND high>=open AND high>=close AND low<=open AND low<=close GROUP BY 1,2) bars`
 	args := []any{}
 	if marketFilter != "" && marketFilter != "ALL" {
 		query += " WHERE bars.market=?"
