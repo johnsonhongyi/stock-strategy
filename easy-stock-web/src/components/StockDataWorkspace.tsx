@@ -1,6 +1,7 @@
 import { Activity, BarChart3, Database, ExternalLink, LoaderCircle, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { BackendConfig, KLine, requestJSON } from '../lib/backend';
+import type { StockDirectoryData, StockDirectoryEntry } from '../lib/backend';
 import './stock-data.css';
 
 type Market = 'CN' | 'US' | 'CRYPTO';
@@ -26,12 +27,39 @@ type Props = {
 };
 
 const marketNames: Record<Market, string> = { CN: 'A股', US: '美股', CRYPTO: '币圈' };
+const directoryStorageKey = 'easy-stock.stock-directory.v1';
+const directoryStorageTTL = 24 * 60 * 60 * 1000;
+const cryptoNames: Record<string, string> = {
+	ADA: '艾达币', AAVE: 'Aave', AVAX: '雪崩协议', BCH: '比特币现金', BNB: '币安币', BTC: '比特币',
+	DOGE: '狗狗币', DOT: '波卡', ETH: '以太坊', FIL: 'Filecoin', LINK: 'Chainlink', LTC: '莱特币',
+	NEAR: 'NEAR', PEPE: '佩佩币', SHIB: '柴犬币', SOL: '索拉纳', TON: 'Toncoin', TRX: '波场币',
+	UNI: 'Uniswap', USDC: '美元币', USDT: '泰达币', XLM: '恒星币', XRP: '瑞波币',
+};
+const usNames: Record<string, string> = {
+	AAPL: '苹果', ABBV: '艾伯维', AMZN: '亚马逊', AMD: '超威半导体', AVGO: '博通', BAC: '美国银行',
+	BABA: '阿里巴巴', BRK_B: '伯克希尔·哈撒韦', COIN: 'Coinbase', COST: '好市多', DIS: '迪士尼',
+	GOOG: '谷歌', GOOGL: '谷歌', INTC: '英特尔', JPM: '摩根大通', META: 'Meta', MSFT: '微软',
+	NFLX: '奈飞', NIO: '蔚来', NVDA: '英伟达', ORCL: '甲骨文', PDD: '拼多多', PLTR: 'Palantir',
+	QCOM: '高通', TSLA: '特斯拉', TSM: '台积电', XOM: '埃克森美孚',
+};
 const keyOf = (stock: StockDataRow) => `${stock.market}:${stock.symbol}`;
 const formatPrice = (value?: number) => value && Number.isFinite(value) ? value.toFixed(2) : '--';
+const normalizeSymbol = (value: string) => value.trim().toUpperCase().split(/[./:_-]/)[0];
+
+function loadDirectoryCache(): { cachedAt: number; stocks: StockDirectoryEntry[] } {
+	try {
+		const cached = JSON.parse(window.localStorage.getItem(directoryStorageKey) || '{}') as { cachedAt?: number; stocks?: StockDirectoryEntry[] };
+		return { cachedAt: cached.cachedAt || 0, stocks: Array.isArray(cached.stocks) ? cached.stocks : [] };
+	} catch {
+		return { cachedAt: 0, stocks: [] };
+	}
+}
 
 export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenStrategy }: Props) {
 	const [stocks, setStocks] = useState<StockDataRow[]>([]);
+	const [directoryCache, setDirectoryCache] = useState(loadDirectoryCache);
 	const [marketFilter, setMarketFilter] = useState<MarketFilter>('ALL');
+	const [trackedOnly, setTrackedOnly] = useState(false);
 	const [addMarket, setAddMarket] = useState<Market>('CN');
 	const [symbolInput, setSymbolInput] = useState('');
 	const [nameInput, setNameInput] = useState('');
@@ -63,11 +91,47 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 
 	useEffect(() => { void reload(); }, [reload, refreshKey]);
 
+	useEffect(() => {
+		if (!config || !stocks.some((stock) => stock.market === 'CN' && (!stock.name.trim() || stock.name.trim().toUpperCase() === stock.symbol.toUpperCase()))) return;
+		if (directoryCache.cachedAt && Date.now() - directoryCache.cachedAt < directoryStorageTTL) return;
+		let cancelled = false;
+		void requestJSON<{ data: StockDirectoryData }>(config, '/api/v1/stocks/directory')
+			.then((payload) => {
+				if (cancelled) return;
+				const stocks = payload.data.stocks || [];
+				const cachedAt = Date.now();
+				setDirectoryCache({ cachedAt, stocks });
+				try { window.localStorage.setItem(directoryStorageKey, JSON.stringify({ cachedAt, stocks })); } catch { /* in-memory names remain available */ }
+			})
+			.catch(() => { /* Keep cached names and symbols usable if the directory is unavailable. */ });
+		return () => { cancelled = true; };
+	}, [config, stocks, directoryCache.cachedAt]);
+
+	const directoryNames = useMemo(() => {
+		const names = new Map<string, string>();
+		for (const item of directoryCache.stocks) {
+			if (!item.name.trim()) continue;
+			names.set(normalizeSymbol(item.symbol), item.name.trim());
+			names.set(normalizeSymbol(item.code), item.name.trim());
+		}
+		return names;
+	}, [directoryCache.stocks]);
+	const namedStocks = useMemo(() => stocks.map((stock) => {
+		const storedName = stock.name.trim();
+		const hasStoredName = storedName && storedName.toUpperCase() !== stock.symbol.trim().toUpperCase();
+		const symbol = normalizeSymbol(stock.symbol);
+		const ticker = stock.symbol.trim().toUpperCase().replace(/[./-]/g, '_');
+		const directoryName = stock.market === 'CN' ? directoryNames.get(symbol) : undefined;
+		const knownName = stock.market === 'CRYPTO' ? cryptoNames[symbol] : stock.market === 'US' ? usNames[ticker] || usNames[symbol] : undefined;
+		return { ...stock, name: hasStoredName ? storedName : directoryName || knownName || stock.symbol };
+	}), [stocks, directoryNames]);
+
 	const visibleStocks = useMemo(() => {
 		const normalizedQuery = query.trim().toLowerCase();
-		return stocks.filter((stock) => (marketFilter === 'ALL' || stock.market === marketFilter)
+		return namedStocks.filter((stock) => (marketFilter === 'ALL' || stock.market === marketFilter)
+			&& (!trackedOnly || stock.tracked)
 			&& (!normalizedQuery || `${stock.symbol} ${stock.name}`.toLowerCase().includes(normalizedQuery)));
-	}, [stocks, marketFilter, query]);
+	}, [namedStocks, marketFilter, trackedOnly, query]);
 	const selected = visibleStocks.find((stock) => keyOf(stock) === selectedKey) || visibleStocks[0] || null;
 	const marketCounts = useMemo(() => ({
 		ALL: stocks.length,
@@ -169,7 +233,7 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 	return <main className="stock-data-workspace">
 		<section className="stock-data-summary">
 			<div><span>本地行情标的</span><strong>{stocks.length}</strong><small>跨市场持久化缓存</small></div>
-			<div><span>跟踪名单</span><strong>{stats.tracked}</strong><small>CN / US 盘后回补</small></div>
+			<button type="button" className={`stock-data-summary-tracked ${trackedOnly ? 'active' : ''}`} aria-pressed={trackedOnly} onClick={() => setTrackedOnly(true)}><span>跟踪名单</span><strong>{stats.tracked}</strong><small>点击查看 · CN / US 盘后回补</small></button>
 			<div><span>本地日线</span><strong>{stats.bars.toLocaleString()}</strong><small>数据范围截至 {stats.latest}</small></div>
 		</section>
 
@@ -187,10 +251,16 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 			{error && <p className="stock-data-message error" role="alert">{error}</p>}
 			{notice && <p className="stock-data-message" role="status">{notice}</p>}
 			<div className="stock-data-controls">
+				<div className="stock-data-scope-tabs" role="tablist" aria-label="行情范围">
+					<button type="button" role="tab" aria-selected={!trackedOnly} className={!trackedOnly ? 'active' : ''} onClick={() => setTrackedOnly(false)}>全部标的 <span>{stocks.length}</span></button>
+					<button type="button" role="tab" aria-selected={trackedOnly} className={trackedOnly ? 'active' : ''} onClick={() => setTrackedOnly(true)}>跟踪名单 <span>{stats.tracked}</span></button>
+				</div>
+				<div className="stock-data-market-row">
 				<div className="stock-data-markets" role="group" aria-label="按市场筛选">
 					{(['ALL', 'CN', 'US', 'CRYPTO'] as MarketFilter[]).map((market) => <button type="button" key={market} className={marketFilter === market ? 'active' : ''} onClick={() => setMarketFilter(market)}>{market === 'ALL' ? '全部' : marketNames[market]} <span>{marketCounts[market]}</span></button>)}
 				</div>
 				<label className="stock-data-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索代码或名称" /></label>
+				</div>
 			</div>
 			<div className="stock-data-columns">
 				<div className="stock-data-list-wrap">
@@ -208,7 +278,7 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 									<button type="button" title="打开系统个股分析" aria-label={`分析 ${stock.symbol}`} onClick={(event) => { event.stopPropagation(); onOpenAnalysis(stock); }}><ExternalLink size={14} /></button>
 								</div></td>
 							</tr>)}
-							{!loading && visibleStocks.length === 0 && <tr><td colSpan={6} className="stock-data-empty">{error ? '行情库暂不可用' : '当前市场还没有持久化标的。'}</td></tr>}
+							{!loading && visibleStocks.length === 0 && <tr><td colSpan={6} className="stock-data-empty">{error ? '行情库暂不可用' : trackedOnly ? '当前市场还没有跟踪标的。' : '当前市场还没有持久化标的。'}</td></tr>}
 						</tbody>
 					</table>
 					{loading && <div className="stock-data-loading"><LoaderCircle size={17} className="stock-data-spin" />正在读取共享 SQLite 行情库…</div>}
