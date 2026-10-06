@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-10-06",
+  "source": "CN closures are maintained from official exchange notices. US regular full-day holidays are generated from NYSE recurring holiday rules; manual overrides cover exceptional closures/open days.",
+  "markets": {
+    "CN": {
+      "closed_ranges": [
+        {"start": "2026-01-01", "end": "2026-01-03"},
+        {"start": "2026-02-15", "end": "2026-02-23"},
+        {"start": "2026-04-04", "end": "2026-04-06"},
+        {"start": "2026-05-01", "end": "2026-05-05"},
+        {"start": "2026-06-19", "end": "2026-06-21"},
+        {"start": "2026-09-25", "end": "2026-09-27"},
+        {"start": "2026-10-01", "end": "2026-10-07"}
+      ],
+      "manual_closed_dates": [],
+      "manual_open_dates": []
+    },
+    "US": {
+      "manual_closed_dates": [],
+      "manual_open_dates": []
+    },
+    "CRYPTO": {
+      "manual_closed_dates": [],
+      "manual_open_dates": []
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+ "note": "美股核心股观察池,用户可随时增删。2026-09-29 初版:7只 mega-cap。",
+ "symbols": [
+  "AAPL",
+  "NVDA",
+  "MSFT",
+  "TSLA",
+  "META",
+  "AMZN",
+  "GOOGL",
+  "INTC",
+  "AMD"
+ ]
+}

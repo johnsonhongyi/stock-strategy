@@ -1,0 +1,27 @@
+{
+  "name": "easy-stock-desktop",
+  "description": "easy-stock AI A-share research desktop application",
+  "author": "easy-stock contributors",
+  "private": true,
+  "version": "1.2.2",
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "node scripts/ensure-hermes-runtime.mjs && ELECTRON_RENDERER_URL=http://127.0.0.1:20073 electron .",
+    "build": "npm run test",
+    "test": "node --test test/*.test.cjs",
+    "prepare:package": "node scripts/prepare-package.mjs",
+    "package:mac": "npm run prepare:package && node scripts/electron-builder.mjs mac dir",
+    "installer:mac": "npm run release:mac",
+    "release:mac": "npm run prepare:package && node scripts/electron-builder.mjs mac release && node scripts/stage-builder-artifacts.mjs mac && node scripts/create-dmg.mjs",
+    "package:windows": "npm run prepare:package && node scripts/electron-builder.mjs windows dir",
+    "release:windows": "npm run prepare:package && node scripts/electron-builder.mjs windows release && node scripts/stage-builder-artifacts.mjs windows && node scripts/create-windows-archive.mjs"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.2.0",
+    "electron": "38.8.6",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}
