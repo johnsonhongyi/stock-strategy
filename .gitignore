@@ -4,3 +4,6 @@
 /easy-stock-service/reviews/
 /easy-stock-service/positions_real.json
 /easy-stock-service/.env
+/easy-stock-web/node_modules/
+/easy-stock-web/dist/
+/easy-stock-web/tsconfig.tsbuildinfo
