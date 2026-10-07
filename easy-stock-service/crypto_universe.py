@@ -1,4 +1,4 @@
-"""数字货币动态宇宙(market='CRYPTO'):每天从 Kraken 全量 Ticker 按 24h 成交额选流动性好的币种。
+"""数字货币动态宇宙(market='CRYPTO'):每天从 Binance 公共行情按 24h 成交额选流动性好的币种,Kraken 回退。
 静态 6 币(BTC/ETH/SOL/XRP/DOGE/ADA) + 动态 TopN,总数上限 18。
 paper only,不碰实盘。宇宙落盘 logs/crypto_universe_<UTC日期>.json,pair 映射持久化 crypto_pairs.json。
 """
@@ -14,12 +14,14 @@ STATIC = ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA"]
 PAIRS_FILE = os.path.join(SVC, "crypto_pairs.json")
 ASSETS_FILE = os.path.join(SVC, "crypto_assets.json")
 UA = {"User-Agent": "Mozilla/5.0"}
+BINANCE_BASE = "https://data-api.binance.vision"
 
 # 稳定币/法币:直接剔除(altname 口径)
-STABLES = {"USDT", "USDC", "DAI", "PYUSD", "USDP", "TUSD", "FDUSD",
-           "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "EURT", "EURI"}
+STABLES = {"USDT", "USDC", "DAI", "PYUSD", "USDP", "TUSD", "FDUSD", "BUSD",
+           "USD1", "RLUSD", "USDE", "USDS", "USDD", "FRAX", "GUSD", "LUSD",
+           "EURC", "EURS", "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "EURT", "EURI"}
 # 杠杆代币后缀
-LEVER_SUFFIX = ("3L", "3S", "2L", "2S", "BULL", "BEAR")
+LEVER_SUFFIX = ("3L", "3S", "2L", "2S", "BULL", "BEAR", "UP", "DOWN")
 
 
 def _get(url, timeout=30):
@@ -43,7 +45,7 @@ def load_cfg():
 def fetch_assets():
     """Kraken Assets 全量(缓存到文件,base_key -> altname)。"""
     try:
-        d = _get("https://api.kraken.com/0/public/Assets")
+        d = _get("https://api.kraken.com/0/public/Assets", timeout=8)
         assets = {k: v.get("altname", k) for k, v in d["result"].items()}
         json.dump(assets, open(ASSETS_FILE, "w"))
         return assets
@@ -73,10 +75,37 @@ def is_leveraged(code):
 
 def fetch_tickers():
     """全量 Ticker,一次调用。返回 {pair_key: ticker}。"""
-    d = _get("https://api.kraken.com/0/public/Ticker")
+    d = _get("https://api.kraken.com/0/public/Ticker", timeout=8)
     if d.get("error"):
         raise RuntimeError("kraken ticker error: %s" % d["error"])
     return d["result"]
+
+
+def fetch_binance_tickers():
+    """Binance public-market 24h tickers; the single response is ~2 MB and fetched once daily."""
+    data = _get(BINANCE_BASE + "/api/v3/ticker/24hr", timeout=30)
+    if not isinstance(data, list):
+        raise RuntimeError("Binance ticker response is not a list")
+    return data
+
+
+def build_binance_rows(tickers):
+    rows = []
+    for ticker in tickers:
+        symbol = str(ticker.get("symbol", "")).upper()
+        if not symbol.endswith("USDT") or len(symbol) <= 4:
+            continue
+        code = symbol[:-4]
+        try:
+            last = float(ticker.get("lastPrice") or 0)
+            volume_usdt = float(ticker.get("quoteVolume") or 0)
+        except (TypeError, ValueError):
+            continue
+        if last <= 0 or volume_usdt <= 0:
+            continue
+        rows.append({"key": symbol, "pair": symbol, "code": code,
+                     "vol_24h_usd": volume_usdt})
+    return rows
 
 
 def _split_key(key):
@@ -211,24 +240,37 @@ def backfill_new(codes, days=180, quiet=False):
                 print(code, "backfill", n)
         except Exception as e:
             out[code] = "FAIL:%s" % str(e)[:60]
-        time.sleep(2)  # Kraken 限频
+        time.sleep(2)  # 上游限频余量
     return out
 
 
 def refresh():
-    """主入口:拉榜->选宇宙->落盘->pair持久化->新币回填。返回宇宙文件路径。"""
+    """主入口:拉榜->选宇宙->落盘->必要时持久化 Kraken pair->新币回填。"""
     cfg = load_cfg()
-    assets = fetch_assets()
-    tickers = fetch_tickers()
-    rows = build_rows(tickers, assets)
+    provider = "binance"
+    try:
+        tickers = fetch_binance_tickers()
+        rows = build_binance_rows(tickers)
+        if not rows:
+            raise RuntimeError("Binance returned no eligible USDT tickers")
+    except Exception as binance_error:
+        provider = "kraken"
+        try:
+            assets = fetch_assets()
+            tickers = fetch_tickers()
+            rows = build_rows(tickers, assets)
+        except Exception as kraken_error:
+            raise RuntimeError("Binance universe failed (%s); Kraken fallback failed (%s)" %
+                               (str(binance_error)[:100], str(kraken_error)[:100]))
     universe, dropped = select_universe(rows, cfg)
     date = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
-    doc = {"date": date, "strategy_cfg": cfg,
+    doc = {"date": date, "source": provider, "strategy_cfg": cfg,
            "universe": universe, "dropped": dropped[:50],
            "dropped_total": len(dropped), "tickers_total": len(tickers)}
     p = universe_path(date)
     json.dump(doc, open(p, "w"), ensure_ascii=False, indent=1)
-    save_pairs(universe)
+    if provider == "kraken":
+        save_pairs(universe)
     new_codes = [r["code"] for r in universe if r["code"] not in STATIC]
     bf = backfill_new(new_codes, days=cfg["backfill_days"])
     doc["backfill"] = bf

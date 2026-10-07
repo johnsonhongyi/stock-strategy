@@ -35,6 +35,7 @@ _API_PREFIXES = (
 )
 _MARKET_HOSTS = {
     "api.kraken.com",
+    "data-api.binance.vision",
     "data.10jqka.com.cn",
     "eq.10jqka.com.cn",
     "flash-api.xuangubao.cn",
@@ -129,7 +130,9 @@ def _ttl_for(url):
     host = (parsed.hostname or "").lower()
     query = {k.lower(): v for k, v in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)}
 
-    if path.endswith("/quotes/realtime") or path.endswith("/ticker") or host in {"hq.sinajs.cn", "qt.gtimg.cn"}:
+    if (path.endswith("/quotes/realtime") or path.endswith("/ticker")
+            or (host == "data-api.binance.vision" and "/ticker/" in path)
+            or host in {"hq.sinajs.cn", "qt.gtimg.cn"}):
         return 15
     if "kline" in path or query.get("klt") or query.get("scale") or path.endswith("/ohlc") or path.endswith("/chart"):
         period = (query.get("period") or query.get("interval") or query.get("klt") or query.get("scale") or "").lower()
@@ -150,7 +153,9 @@ def _stale_limit(url):
     path = parsed.path.lower()
     host = (parsed.hostname or "").lower()
     query = {k.lower(): v for k, v in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)}
-    if path.endswith("/quotes/realtime") or path.endswith("/ticker") or host in {"hq.sinajs.cn", "qt.gtimg.cn"}:
+    if (path.endswith("/quotes/realtime") or path.endswith("/ticker")
+            or (host == "data-api.binance.vision" and "/ticker/" in path)
+            or host in {"hq.sinajs.cn", "qt.gtimg.cn"}):
         return 2 * 60 * 60
     if "10jqka.com.cn" in host or "stockrank" in path:
         return 12 * 60 * 60
