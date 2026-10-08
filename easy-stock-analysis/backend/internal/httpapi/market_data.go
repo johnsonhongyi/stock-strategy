@@ -1,14 +1,17 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"easy-stock/backend/internal/marketbars"
+	"easy-stock/backend/internal/marketcache"
 )
 
 var managedUSSymbol = regexp.MustCompile(`^[A-Z][A-Z0-9.]{0,9}$`)
@@ -124,6 +127,63 @@ func (s *Server) marketDataStockBars(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"market": market, "symbol": code, "data": lines})
+}
+
+func (s *Server) marketDataStockRefresh(w http.ResponseWriter, r *http.Request) {
+	if s.marketBars == nil || s.kLinePrimary == nil {
+		writeError(w, http.StatusServiceUnavailable, "本地行情数据库或统一行情接口不可用")
+		return
+	}
+	code, market, err := normalizeManagedStock(r.PathValue("market"), r.PathValue("symbol"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	limit := 240
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 240 {
+			writeError(w, http.StatusBadRequest, "limit须在1到240之间")
+			return
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	ctx = marketbars.WithMarket(ctx, market)
+	ctx = marketcache.WithRefresh(ctx)
+	lines, err := s.loadKLine(ctx, code, "day", limit)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "上游行情刷新失败: "+err.Error())
+		return
+	}
+	lines, expected, err := completedDailyKLines(lines, market)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "校验完整交易日日线失败: "+err.Error())
+		return
+	}
+	if len(lines) == 0 {
+		writeError(w, http.StatusBadGateway, "上游未返回可持久化的完整日线")
+		return
+	}
+	for _, line := range lines {
+		if line.Meta.Stale {
+			writeError(w, http.StatusBadGateway, "上游仅返回陈旧回退数据，未写入本地行情库")
+			return
+		}
+	}
+	if dailyBarsBehind(lines, expected) {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("上游日线仍停留在历史日期，未写入本地行情库；需要更新至 %s", expected))
+		return
+	}
+	if err := s.marketBars.UpsertDaily(ctx, code, market, lines); err != nil {
+		writeError(w, http.StatusInternalServerError, "写入本地行情库失败: "+err.Error())
+		return
+	}
+	latestDate := lines[len(lines)-1].Time.In(time.FixedZone("Asia/Shanghai", 8*60*60)).Format("2006-01-02")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"market": market, "symbol": code, "bars_persisted": len(lines), "latest_date": latestDate, "data": lines,
+	})
 }
 
 func (s *Server) marketDataStockCacheClear(w http.ResponseWriter, r *http.Request) {

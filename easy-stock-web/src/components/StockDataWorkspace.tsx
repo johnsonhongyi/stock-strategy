@@ -1,5 +1,5 @@
 import { Activity, Database, ExternalLink, LoaderCircle, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BackendConfig, KLine, Quote, requestJSON } from '../lib/backend';
 import type { StockDirectoryData, StockDirectoryEntry } from '../lib/backend';
 import { KLineChart } from './KLineChart';
@@ -104,7 +104,9 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 	const [query, setQuery] = useState('');
 	const [selectedKey, setSelectedKey] = useState('');
 	const [bars, setBars] = useState<KLine[]>([]);
+	const [barsKey, setBarsKey] = useState('');
 	const [quote, setQuote] = useState<Quote | null>(null);
+	const [quoteKey, setQuoteKey] = useState('');
 	const [loading, setLoading] = useState(false);
 	const [barsLoading, setBarsLoading] = useState(false);
 	const [busyKey, setBusyKey] = useState('');
@@ -171,7 +173,15 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 			&& (!trackedOnly || stock.tracked)
 			&& (!normalizedQuery || `${stock.symbol} ${stock.name}`.toLowerCase().includes(normalizedQuery)));
 	}, [namedStocks, marketFilter, trackedOnly, query]);
+	useEffect(() => {
+		if (visibleStocks.some((stock) => keyOf(stock) === selectedKey)) return;
+		setSelectedKey(visibleStocks[0] ? keyOf(visibleStocks[0]) : '');
+	}, [visibleStocks, selectedKey]);
 	const selected = visibleStocks.find((stock) => keyOf(stock) === selectedKey) || visibleStocks[0] || null;
+	const selectedKeyRef = useRef(selected ? keyOf(selected) : '');
+	useEffect(() => { selectedKeyRef.current = selected ? keyOf(selected) : ''; }, [selected]);
+	const selectedBars = selected && barsKey === keyOf(selected) ? bars : [];
+	const selectedQuote = selected && quoteKey === keyOf(selected) ? quote : null;
 	const marketCounts = useMemo(() => ({
 		ALL: stocks.length,
 		CN: stocks.filter((stock) => stock.market === 'CN').length,
@@ -183,31 +193,36 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 		bars: stocks.reduce((sum, stock) => sum + stock.bar_count, 0),
 		latest: (() => { const dates = stocks.map((stock) => stock.latest_date || '').filter(Boolean).sort(); return dates[dates.length - 1] || '--'; })(),
 	}), [stocks]);
-	const snapshot = useMemo(() => selected ? summarizeDailyBars(bars, selected) : null, [bars, selected]);
-	const quoteChange = quote?.change_percent ?? (snapshot?.latest ? dailyChangePercent([...bars].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime()), bars.length - 1) : undefined);
-	const quotePrice = quote?.price || snapshot?.latest?.close || selected?.latest_close;
+	const snapshot = useMemo(() => selected ? summarizeDailyBars(selectedBars, selected) : null, [selectedBars, selected]);
+	const quoteChange = selectedQuote?.change_percent ?? (snapshot?.latest ? dailyChangePercent([...selectedBars].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime()), selectedBars.length - 1) : undefined);
+	const quotePrice = selectedQuote?.price || snapshot?.latest?.close || selected?.latest_close;
 
 	useEffect(() => {
 		if (!selected) {
 			setBars([]);
+			setBarsKey('');
 			setQuote(null);
+			setQuoteKey('');
 			setBarsError('');
 			return;
 		}
 		if (!config) return;
 		let cancelled = false;
+		const selectedKeyForRequest = keyOf(selected);
 		setBars([]);
+		setBarsKey('');
 		setQuote(null);
+		setQuoteKey('');
 		setBarsLoading(true);
 		setBarsError('');
 		void requestJSON<{ data: KLine[] }>(config, `/api/v1/quotes/kline?symbol=${encodeURIComponent(selected.symbol)}&market=${selected.market}&period=day&limit=60`)
-			.then((payload) => { if (!cancelled) setBars(payload.data || []); })
+			.then((payload) => { if (!cancelled) { setBars(payload.data || []); setBarsKey(selectedKeyForRequest); } })
 			.catch((loadError) => { if (!cancelled) setBarsError(loadError instanceof Error ? loadError.message : '统一行情日线暂不可用'); })
 			.finally(() => { if (!cancelled) setBarsLoading(false); });
 		if (selected.market === 'CN') {
 			void requestJSON<{ data: Quote[] }>(config, `/api/v1/quotes/realtime?symbols=${encodeURIComponent(selected.symbol)}`)
-				.then((payload) => { if (!cancelled) setQuote(payload.data?.[0] || null); })
-				.catch(() => { if (!cancelled) setQuote(null); });
+				.then((payload) => { if (!cancelled) { setQuote(payload.data?.[0] || null); setQuoteKey(selectedKeyForRequest); } })
+				.catch(() => { if (!cancelled) { setQuote(null); setQuoteKey(selectedKeyForRequest); } });
 		}
 		return () => { cancelled = true; };
 	}, [config, selected?.market, selected?.symbol, dataVersion]);
@@ -282,7 +297,8 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 
 	const refreshBars = async (stock: StockDataRow) => {
 		if (!config) return;
-		const isSelected = selected != null && keyOf(selected) === keyOf(stock);
+		const stockKey = keyOf(stock);
+		const isSelected = selectedKeyRef.current === stockKey;
 		setBusyKey(keyOf(stock));
 		if (isSelected) {
 			setBarsLoading(true);
@@ -291,22 +307,19 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 		setError('');
 		setNotice('');
 		try {
-			const payload = await requestJSON<{ data: KLine[] }>(config,
-				`/api/v1/quotes/kline?symbol=${encodeURIComponent(stock.symbol)}&market=${stock.market}&period=day&limit=240`,
-				{ headers: { 'X-Stock-Cache-Refresh': '1' } });
+			const payload = await requestJSON<{ data: KLine[]; bars_persisted: number; latest_date: string }>(config,
+				`/api/v1/market-data/stocks/${stock.market}/${encodeURIComponent(stock.symbol)}/refresh?limit=240`,
+				{ method: 'POST' });
 			const refreshed = payload.data || [];
-			if (isSelected) setBars(refreshed);
-			const stale = refreshed.some((line) => line.meta?.stale);
-			setNotice(stale
-				? `${stock.symbol} 当前只能返回回退数据，已保留本地结果；后续任务会继续检查并回补。`
-				: `${stock.symbol} 手动更新完成，统一行情底座返回 ${refreshed.length} 条日线。`);
+			if (selectedKeyRef.current === stockKey) { setBars(refreshed); setBarsKey(stockKey); }
+			setNotice(`${stock.symbol} 已将 ${payload.bars_persisted || refreshed.length} 条完整日线写入本地行情库，最新日期 ${payload.latest_date || '--'}。`);
 			await reload();
 		} catch (refreshError) {
 			const message = refreshError instanceof Error ? refreshError.message : '手动回补失败';
-			if (isSelected) setBarsError(message);
+			if (selectedKeyRef.current === stockKey) setBarsError(message);
 			else setError(message);
 		} finally {
-			if (isSelected) setBarsLoading(false);
+			if (selectedKeyRef.current === stockKey) setBarsLoading(false);
 			setBusyKey('');
 		}
 	};
@@ -368,23 +381,23 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 				<aside className="stock-data-detail">
 					{selected ? <>
 						<div className="stock-data-detail-heading">
-							<div><span>{marketNames[selected.market]} · 个股日 K</span><h3>{quote?.name || selected.name || selected.symbol}</h3><small>{selected.symbol} · {selected.bar_count} 条已持久化日线</small></div>
-							<div className={`stock-data-quote ${quoteChange == null ? '' : quoteChange >= 0 ? 'up' : 'down'}`}><strong>{formatPrice(quotePrice)}</strong><em>{formatSignedPercent(quoteChange)}</em><small>{quote ? `实时行情 · ${quote.meta.source || '统一接口'}` : snapshot?.latest ? `最新收盘 · ${snapshot.latest.meta.source || '本地缓存'}` : '等待行情数据'}</small></div>
+							<div><span>{marketNames[selected.market]} · 个股日 K</span><h3>{selectedQuote?.name || selected.name || selected.symbol}</h3><small>{selected.symbol} · {selected.bar_count} 条已持久化日线</small></div>
+							<div className={`stock-data-quote ${quoteChange == null ? '' : quoteChange >= 0 ? 'up' : 'down'}`}><strong>{formatPrice(quotePrice)}</strong><em>{formatSignedPercent(quoteChange)}</em><small>{selectedQuote ? `实时行情 · ${selectedQuote.meta.source || '统一接口'}` : snapshot?.latest ? `最新收盘 · ${snapshot.latest.meta.source || '本地缓存'}` : '等待行情数据'}</small></div>
 						</div>
 						<div className="stock-data-detail-actions"><button type="button" disabled={!config || busyKey === keyOf(selected)} onClick={() => void refreshBars(selected)}><RefreshCw size={14} className={busyKey === keyOf(selected) ? 'stock-data-spin' : ''} />{selected.bar_count === 0 ? '手动回补' : '手动更新'}</button><button type="button" onClick={() => onOpenAnalysis(selected)}><Activity size={14} />个股分析</button><button type="button" onClick={() => onOpenStrategy(selected)}><ExternalLink size={14} />策略研判</button><button type="button" className="danger" disabled={busyKey === keyOf(selected)} onClick={() => void clearCache(selected)}><Trash2 size={14} />清空日线</button></div>
 						{barsError && <p className="stock-data-message error">{barsError}</p>}
-						<KLineChart lines={bars} symbol={selected.symbol} state={barsLoading ? 'loading' : barsError ? 'error' : 'ready'} mode="daily" periodLabel="日K" compact />
+						<KLineChart key={keyOf(selected)} lines={selectedBars} symbol={selected.symbol} state={barsError ? 'error' : barsLoading || barsKey !== keyOf(selected) ? 'loading' : 'ready'} mode="daily" periodLabel="日K" compact />
 						<div className="stock-snapshot stock-data-snapshot">
 							<div><span>近5日</span><strong className={snapshot?.return5 == null ? '' : snapshot.return5 >= 0 ? 'up' : 'down'}>{formatSignedPercent(snapshot?.return5)}</strong></div>
 							<div><span>20日位置</span><strong>{snapshot?.position20 == null ? '--' : `${snapshot.position20.toFixed(0)}%`}</strong></div>
 							<div><span>最高连板</span><strong>{snapshot?.maxLimitStreak ? `${snapshot.maxLimitStreak}` : '--'}</strong></div>
 						</div>
 						<details className="stock-data-bars-detail">
-							<summary>日线明细 · {bars.length || selected.bar_count} 条</summary>
+							<summary>日线明细 · {selectedBars.length || selected.bar_count} 条</summary>
 							<div className="stock-data-bars-wrap">
 								<table className="stock-data-bars"><thead><tr><th>日期</th><th>开</th><th>高</th><th>低</th><th>收</th><th>成交量</th></tr></thead><tbody>
-									{[...bars].reverse().map((bar) => <tr key={`${bar.time}-${bar.symbol}`}><td>{bar.time.slice(0, 10)}</td><td>{formatPrice(bar.open)}</td><td>{formatPrice(bar.high)}</td><td>{formatPrice(bar.low)}</td><td>{formatPrice(bar.close)}</td><td>{Math.round(bar.volume).toLocaleString()}</td></tr>)}
-									{!barsLoading && bars.length === 0 && <tr><td colSpan={6} className="stock-data-empty">暂无可用日线；统一行情接口会优先读本地缓存。</td></tr>}
+									{[...selectedBars].reverse().map((bar) => <tr key={`${bar.time}-${bar.symbol}`}><td>{bar.time.slice(0, 10)}</td><td>{formatPrice(bar.open)}</td><td>{formatPrice(bar.high)}</td><td>{formatPrice(bar.low)}</td><td>{formatPrice(bar.close)}</td><td>{Math.round(bar.volume).toLocaleString()}</td></tr>)}
+									{!barsLoading && selectedBars.length === 0 && <tr><td colSpan={6} className="stock-data-empty">暂无可用日线；统一行情接口会优先读本地缓存。</td></tr>}
 								</tbody></table>
 								{barsLoading && <div className="stock-data-loading"><LoaderCircle size={16} className="stock-data-spin" />读取日线明细…</div>}
 							</div>

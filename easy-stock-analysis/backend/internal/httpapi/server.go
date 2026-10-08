@@ -535,6 +535,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/market-data/stocks", s.marketDataStocks)
 	s.mux.HandleFunc("POST /api/v1/market-data/stocks", s.marketDataStockAdd)
 	s.mux.HandleFunc("GET /api/v1/market-data/stocks/{market}/{symbol}/bars", s.marketDataStockBars)
+	s.mux.HandleFunc("POST /api/v1/market-data/stocks/{market}/{symbol}/refresh", s.marketDataStockRefresh)
 	s.mux.HandleFunc("DELETE /api/v1/market-data/stocks/{market}/{symbol}", s.marketDataStockRemove)
 	s.mux.HandleFunc("DELETE /api/v1/market-data/stocks/{market}/{symbol}/cache", s.marketDataStockCacheClear)
 	s.mux.HandleFunc("GET /api/v1/market/news", s.news)
