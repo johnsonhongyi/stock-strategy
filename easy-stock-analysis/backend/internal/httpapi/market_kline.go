@@ -17,6 +17,7 @@ import (
 )
 
 type marketFirstKLineProvider struct {
+	international   KLineProvider
 	store           *marketbars.Store
 	primary         KLineProvider
 	fallback        KLineProvider
@@ -236,6 +237,10 @@ func (p *marketFirstKLineProvider) claimSessionRefresh(market string, symbol str
 }
 
 func (p *marketFirstKLineProvider) fetchWithFallback(ctx context.Context, symbol string, period string, limit int) ([]foundation.KLine, error) {
+	market := marketbars.MarketFromContext(ctx)
+	if p.international != nil && (market == "US" || market == "CRYPTO") {
+		return p.fetch(ctx, p.international, symbol, period, limit)
+	}
 	lines, primaryErr := p.fetch(ctx, p.primary, symbol, period, limit)
 	if primaryErr == nil {
 		return lines, nil

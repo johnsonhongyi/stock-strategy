@@ -45,14 +45,14 @@ func (t *cacheTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	resp, err := t.next.RoundTrip(req)
 	if err != nil {
-		if usableStale(req, cached, now) {
+		if !forceRefresh && usableStale(req, cached, now) {
 			log.Printf("market cache stale fallback host=%s age=%s", req.URL.Hostname(), now.Sub(cached.fetchedAt).Round(time.Second))
 			return cached.response(req, "STALE"), nil
 		}
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
-		if usableStale(req, cached, now) {
+		if !forceRefresh && usableStale(req, cached, now) {
 			_ = resp.Body.Close()
 			log.Printf("market cache stale fallback host=%s status=%d", req.URL.Hostname(), resp.StatusCode)
 			return cached.response(req, "STALE"), nil
@@ -143,7 +143,7 @@ func isDailyKLineRequest(req *http.Request) bool {
 	path := strings.ToLower(req.URL.Path)
 	query := req.URL.Query()
 	if !strings.Contains(path, "kline") && query.Get("klt") == "" && query.Get("scale") == "" &&
-		!strings.HasSuffix(path, "/ohlc") && !strings.HasSuffix(path, "/chart") {
+		!strings.HasSuffix(path, "/ohlc") && !strings.Contains(path, "/chart/") && !strings.HasSuffix(path, "/chart") {
 		return false
 	}
 	for _, value := range []string{query.Get("period"), query.Get("interval"), query.Get("klt"), query.Get("scale")} {

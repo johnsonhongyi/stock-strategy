@@ -111,7 +111,7 @@ def token():
     return m.group(1) if m else ""
 
 def api(path, force_refresh=False):
-    req = urllib.request.Request("http://127.0.0.1:20081" + path, headers=UA)
+    req = urllib.request.Request(os.environ.get("EASY_STOCK_API_URL", "http://127.0.0.1:20081").rstrip("/") + path, headers=UA)
     with market_cache.urlopen(req, timeout=30, force_refresh=force_refresh) as r:
         return json.loads(r.read().decode("utf-8", "ignore"))
 
@@ -227,7 +227,7 @@ def _fetch_history(codes):
                 print("history incomplete; retry next run: %s" % ",".join(missing), flush=True)
         except Exception as e:
             c.rollback()
-            print("batch %d FAIL %s" % (i, str(e)[:100]), flush=True)
+            print("batch %d FAIL %s" % (i, str(e)[:500]), flush=True)
         time.sleep(3)  # 降频,不密集
     c.close()
     return total
@@ -367,9 +367,10 @@ def append_today():
         "SELECT 1 FROM daily_bars WHERE market='CN' AND code=? AND date=? AND open>0 AND high>=low AND low>0 AND close>0 AND high>=open AND high>=close AND low<=open AND low<=close",
         (x, today)).fetchone()]
     if not todo:
-        print(today, "all tracked symbols have valid daily bars")
+        unresolved = [x for x in uni if _history_needs_repair(c, x, today)]
+        print(today, "all tracked symbols have valid daily bars; unresolved history=%d" % len(unresolved))
         c.close()
-        return
+        return len(unresolved)
     snap = sina_snapshot(todo, force_refresh=True)
     n = 0
     ticks = []
@@ -403,11 +404,12 @@ def append_today():
     c.close()
     print(today, "appended bars=%d/%d unresolved=%d %s" % (n, len(todo), len(unresolved), tick_range))
     if unresolved:
-        print("still incomplete; next scheduled run will retry: %s" % ",".join(unresolved), flush=True)
+        print("CN append incomplete; next scheduled run will retry: %s" % ",".join(unresolved), flush=True)
+    return len(unresolved)
 
 if __name__ == "__main__":
     if "--backfill" in sys.argv: backfill()
-    elif "--append" in sys.argv: append_today()
+    elif "--append" in sys.argv: sys.exit(min(append_today() or 0, 125))
     elif "--universe" in sys.argv: print(get_universe())
     elif "--get" in sys.argv:
         i = sys.argv.index("--get")

@@ -14,6 +14,7 @@ import (
 	"easy-stock/backend/internal/hermes"
 	"easy-stock/backend/internal/httpapi"
 	"easy-stock/backend/internal/marketcache"
+	"easy-stock/backend/internal/marketnetwork"
 	"easy-stock/backend/internal/methodology"
 	"easy-stock/backend/internal/persistence"
 	"easy-stock/backend/internal/runtimelog"
@@ -100,6 +101,7 @@ func main() {
 			logger.Printf("level=info event=runtime_start component=backend version=%q", runtimeVersion())
 		}
 	}
+	network := &marketnetwork.Config{Path: filepath.Join(filepath.Dir(sharedDBPath), "market-network.json")}
 	marketCache, err := marketcache.Open(sharedDBPath)
 	if err != nil {
 		log.Fatalf("persistent market cache startup failed: %v", err)
@@ -135,7 +137,8 @@ func main() {
 		RemoteDailyReviewURL: os.Getenv("A_STOCK_DAILY_REVIEW_BASE_URL"),
 		MarketEmotionDBPath:  sharedDBPath,
 		MarketDataDBPath:     sharedDBPath,
-		MarketCacheTransport: marketCache.RoundTripper(nil),
+		MarketCacheTransport: marketCache.RoundTripper(network.Transport()),
+		MarketNetwork:        network,
 		ThemeRadarDBPath:     sharedDBPath,
 		DuanxianxiaBaseURL:   os.Getenv("A_STOCK_DUANXIANXIA_BASE_URL"),
 		WeChatAPIURL:         os.Getenv("A_STOCK_WECHAT_API_URL"),

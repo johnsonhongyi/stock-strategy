@@ -168,7 +168,7 @@ func (s *Server) marketDataStockRefresh(w http.ResponseWriter, r *http.Request) 
 	}
 	for _, line := range lines {
 		if line.Meta.Stale {
-			writeError(w, http.StatusBadGateway, "上游仅返回陈旧回退数据，未写入本地行情库")
+			writeError(w, http.StatusBadGateway, "上游仅返回陈旧回退数据，未写入本地行情库: "+line.Meta.FallbackReason)
 			return
 		}
 	}

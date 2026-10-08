@@ -16,6 +16,8 @@ import time
 import urllib.parse
 import urllib.request
 import data_store
+import market_network
+import market_network
 
 
 SVC = os.path.dirname(os.path.abspath(__file__))
@@ -270,7 +272,7 @@ def urlopen(url, timeout=30, *, force_refresh=False):
         or "no-cache" in request.headers.get("Cache-Control", "").lower()
         or "no-store" in request.headers.get("Cache-Control", "").lower()
     ):
-        return urllib.request.urlopen(request, timeout=timeout)
+        return market_network.urlopen(request, timeout=timeout)
 
     now = time.time()
     try:
@@ -284,12 +286,12 @@ def urlopen(url, timeout=30, *, force_refresh=False):
             return CachedResponse(body, target_url, status, cached_headers, "HIT")
 
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with market_network.urlopen(request, timeout=timeout) as response:
             body = response.read()
             status = response.getcode() or 200
             headers = {key: [value] for key, value in response.info().items()}
     except Exception:
-        if cached:
+        if cached and not force_refresh:
             status, cached_headers, body, fetched_at, _expires_at = cached
             age = max(0.0, now - fetched_at)
             if age <= _stale_limit(target_url):

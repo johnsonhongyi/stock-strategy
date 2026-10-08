@@ -32,7 +32,7 @@
 .stock-data-search { display: flex; align-items: center; gap: 7px; width: min(260px, 45%); height: 32px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); }
 .stock-data-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 11px; }
 .stock-data-columns { display: grid; grid-template-columns: minmax(0, 1.28fr) minmax(310px, .72fr); min-height: 380px; }
-.stock-data-list-wrap { min-width: 0; overflow: auto; border-right: 1px solid var(--line-soft); }
+.stock-data-list-wrap { max-height: clamp(380px, 65vh, 780px); min-width: 0; overflow: auto; border-right: 1px solid var(--line-soft); }
 .stock-data-list, .stock-data-bars { width: 100%; border-collapse: collapse; font-size: 10px; }
 .stock-data-list th, .stock-data-bars th { position: sticky; top: 0; z-index: 1; padding: 9px 10px; border-bottom: 1px solid var(--line-soft); background: var(--surface-soft, #f8fafc); color: var(--muted); text-align: left; white-space: nowrap; }
 .stock-data-list td, .stock-data-bars td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); color: var(--theme-muted, #52677e); white-space: nowrap; }

@@ -387,7 +387,9 @@ func readMarketAppendLog(status *scheduledJobStatus, path string, now time.Time)
 			status.LastMessage = "行情回补失败，查看最近日志"
 			code := parseAppendExitCode(line)
 			status.ExitCode = &code
-			status.LastError = runtimelog.Redact(truncateStatusText(line, 1000))
+			if status.LastError == "" {
+				status.LastError = runtimelog.Redact(truncateStatusText(line, 1000))
+			}
 		} else if strings.Contains(line, "append already running; skipped") && strings.Contains(line, status.ID) {
 			status.LastStatus = "已跳过"
 			status.LastMessage = "已有同类回补任务运行，本次未重复启动"
@@ -401,7 +403,7 @@ func readMarketAppendLog(status *scheduledJobStatus, path string, now time.Time)
 			status.LastFinished = timePointer(eventAt)
 		}
 		lowerLine := strings.ToLower(line)
-		if strings.Contains(lowerLine, "fail") || strings.Contains(lowerLine, "error") || strings.Contains(lowerLine, "失败") || strings.Contains(lowerLine, "错误") || strings.Contains(lowerLine, "traceback") {
+		if !strings.Contains(line, "append failed (exit=") && (strings.Contains(lowerLine, "fail") || strings.Contains(lowerLine, "error") || strings.Contains(lowerLine, "失败") || strings.Contains(lowerLine, "错误") || strings.Contains(lowerLine, "traceback")) {
 			if status.LastStatus == "运行中" || status.LastStatus == "失败" || status.LastStatus == "部分失败" {
 				status.LastError = runtimelog.Redact(truncateStatusText(line, 1000))
 			}

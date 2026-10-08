@@ -21,6 +21,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import market_network
 
 SVC = os.path.dirname(os.path.abspath(__file__))
 DB = data_store.DB_PATH
@@ -110,7 +111,7 @@ def eastmoney_daily(symbol, limit=5):
         "User-Agent": UA["User-Agent"],
         "Referer": "https://quote.eastmoney.com/",
     })
-    with urllib.request.urlopen(req, timeout=30) as response:
+    with market_network.urlopen(req, timeout=30) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if payload.get("rc") != 0:
         raise RuntimeError("Eastmoney K-line rc=%s for %s" % (payload.get("rc"), symbol))
@@ -147,7 +148,7 @@ def tencent_daily(symbol, expected_date, limit=10):
         "User-Agent": UA["User-Agent"],
         "Referer": "https://gu.qq.com/",
     })
-    with urllib.request.urlopen(req, timeout=15) as response:
+    with market_network.urlopen(req, timeout=15) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if payload.get("code") != 0:
         raise RuntimeError("Tencent K-line code=%s for %s" % (payload.get("code"), symbol))
@@ -197,25 +198,41 @@ def fetch_daily(symbol, range_="5d", expected_date=None):
 
 
 def _upsert(code, bars, source):
+    from bars import _validated_history_bar
+    from trading_calendar import today_str, us_market_closed, prev_trading_day
+    expected = today_str("US")
+    if not us_market_closed(expected):
+        expected = prev_trading_day(expected, market="US")
+    validated = []
+    for day, opened, high, low, close, adjusted, volume in bars:
+        parsed = _validated_history_bar({"time": day, "open": opened, "high": high,
+            "low": low, "close": close, "volume": volume,
+            "amount": (close or 0) * (volume or 0)})
+        if not parsed or parsed[0] > expected:
+            continue
+        validated.append(parsed)
+    if not validated:
+        raise RuntimeError("US returned no valid completed daily bars; expected=%s" % expected)
     c = db()
-    n = 0
-    for day, o, h, l, cl, a, v in bars:
-        amount = (cl or 0) * (v or 0)  # 美元成交额
-        c.execute("""INSERT OR REPLACE INTO daily_bars
-            (code,date,open,high,low,close,prev_close,volume,amount,source,market)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-            (code, day, o, h, l, cl, None, v, amount, source, "US"))
-        n += 1
-    # prev_close 回填:按日期顺序用前一日收盘
-    rows = c.execute(
-        "SELECT date,close FROM daily_bars WHERE code=? AND market='US' ORDER BY date",
-        (code,)).fetchall()
-    for i in range(1, len(rows)):
-        c.execute("UPDATE daily_bars SET prev_close=? WHERE code=? AND date=? AND market='US'",
-                  (rows[i-1][1], code, rows[i][0]))
-    c.commit()
-    c.close()
-    return n
+    try:
+        for day, opened, high, low, close, previous, volume, amount in validated:
+            c.execute("""INSERT OR REPLACE INTO daily_bars
+                (code,date,open,high,low,close,prev_close,volume,amount,source,market)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (code, day, opened, high, low, close, previous, volume, amount, source, "US"))
+        rows = c.execute(
+            "SELECT date,close FROM daily_bars WHERE code=? AND market='US' ORDER BY date",
+            (code,)).fetchall()
+        for i in range(1, len(rows)):
+            c.execute("UPDATE daily_bars SET prev_close=? WHERE code=? AND date=? AND market='US'",
+                      (rows[i-1][1], code, rows[i][0]))
+        c.commit()
+        return len(validated)
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
 
 
 def _seeded(code):

@@ -19,6 +19,7 @@ import (
 	"easy-stock/backend/internal/marketbars"
 	"easy-stock/backend/internal/marketcache"
 	"easy-stock/backend/internal/marketemotion"
+	"easy-stock/backend/internal/marketnetwork"
 	"easy-stock/backend/internal/methodology"
 	"easy-stock/backend/internal/portfolioinspection"
 	"easy-stock/backend/internal/providers/cls"
@@ -37,6 +38,7 @@ import (
 )
 
 type Server struct {
+	marketNetwork         *marketnetwork.Config
 	ladderThemeAI         *ladderThemeAI
 	mux                   *http.ServeMux
 	token                 string
@@ -107,7 +109,9 @@ func NewServer(config any) *Server {
 	if cfg.Realtime == nil {
 		cfg.Realtime = sinaClient
 	}
+	var international KLineProvider
 	if cfg.KLinePrimary == nil {
+		international = &internationalKLineProvider{client: newMarketHTTPClient(20*time.Second, cfg.MarketCacheTransport)}
 		cfg.KLinePrimary = eastMoneyClient
 	}
 	if cfg.KLineFallback == nil {
@@ -196,10 +200,11 @@ func NewServer(config any) *Server {
 	}
 	if cfg.MarketDataStore != nil {
 		cfg.KLinePrimary = &marketFirstKLineProvider{
-			store:    cfg.MarketDataStore,
-			primary:  cfg.KLinePrimary,
-			fallback: cfg.KLineFallback,
-			logger:   cfg.Logger,
+			store:         cfg.MarketDataStore,
+			international: international,
+			primary:       cfg.KLinePrimary,
+			fallback:      cfg.KLineFallback,
+			logger:        cfg.Logger,
 		}
 		cfg.KLineFallback = nil
 	}
@@ -308,6 +313,7 @@ func NewServer(config any) *Server {
 	}
 	s := &Server{
 		mux:                   http.NewServeMux(),
+		marketNetwork:         cfg.MarketNetwork,
 		token:                 cfg.Token,
 		realtimeProvider:      cfg.Realtime,
 		kLinePrimary:          cfg.KLinePrimary,
@@ -528,6 +534,8 @@ func (s *Server) refreshMasterySnapshot(ctx context.Context, force bool) {
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.health)
 	s.mux.HandleFunc("GET /api/v1/system/status", s.systemStatus)
+	s.mux.HandleFunc("GET /api/v1/market-data/network", s.marketNetworkSettings)
+	s.mux.HandleFunc("PUT /api/v1/market-data/network", s.marketNetworkSettings)
 	s.mux.HandleFunc("GET /api/v1/sources", s.sources)
 	s.mux.HandleFunc("GET /api/v1/quotes/realtime", s.realtime)
 	s.mux.HandleFunc("GET /api/v1/quotes/kline", s.kline)

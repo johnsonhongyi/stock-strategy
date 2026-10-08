@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { BackendConfig, requestJSON } from '../lib/backend';
 import './system-status.css';
+import { MarketNetworkSettings } from './MarketNetworkSettings';
 
 type MarketStatus = {
 	market: string;
@@ -199,7 +200,8 @@ export function SystemStatusWorkspace({ config, refreshKey }: { config: BackendC
 				<section className="system-status-panel">
 					<header><div><span><Clock3 size={15} /> 盘后自动回补</span><strong>计划、执行结果与可回溯日志</strong></div><small>日志保存在外置持久化目录</small></header>
 				{status.schedule_read_error && <div className="system-status-alert compact"><AlertTriangle size={15} /><span>{status.schedule_read_error}</span></div>}
-				<div className="system-status-jobs">{status.scheduled_jobs.map((job) => <article className="system-status-job" key={job.id}>
+				<MarketNetworkSettings config={config} onRetried={() => setManualRefreshKey((value) => value + 1)} />
+					<div className="system-status-jobs">{status.scheduled_jobs.map((job) => <article className="system-status-job" key={job.id}>
 					<div className="system-status-job-heading"><div><strong>{job.name}</strong><small>{job.market} · {job.schedule} · {job.timezone}</small></div><em className={`system-status-pill ${stateTone(job.last_status)}`}>{job.last_status}</em></div>
 					<div className="system-status-job-times"><span>最近开始<strong>{formatTime(job.last_started_at)}</strong></span><span>最近结束<strong>{formatTime(job.last_finished_at)}</strong></span><span>下次计划<strong>{formatTime(job.next_run_at)}</strong></span><span>退出码<strong>{job.exit_code ?? '—'}</strong></span></div>
 					{job.last_message && <p>{job.last_message}</p>}
@@ -207,7 +209,7 @@ export function SystemStatusWorkspace({ config, refreshKey }: { config: BackendC
 					<details className="system-status-log"><summary>查看最近日志 · {job.log_path}</summary>{job.recent_log?.length ? <pre>{job.recent_log.join('\n')}</pre> : <p>当前没有可显示的任务日志。</p>}</details>
 				</article>)}</div>
 				</section>
-				<p className="system-status-storage-note"><CheckCircle2 size={15} />数据库与增长型日志均从外置持久化卷读取；本看板只读状态，不在容器内写入监控数据。接口生成时间：{formatTime(status.generated_at)}</p>
+				<p className="system-status-storage-note"><CheckCircle2 size={15} />行情与任务日志保存在外置持久化目录；手动重试校验通过后更新行情库。接口生成时间：{formatTime(status.generated_at)}</p>
 			</>}
 		</section>
 	);

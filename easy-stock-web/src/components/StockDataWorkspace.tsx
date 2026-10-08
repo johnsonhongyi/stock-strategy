@@ -217,7 +217,14 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 		setBarsError('');
 		void requestJSON<{ data: KLine[] }>(config, `/api/v1/quotes/kline?symbol=${encodeURIComponent(selected.symbol)}&market=${selected.market}&period=day&limit=60`)
 			.then((payload) => { if (!cancelled) { setBars(payload.data || []); setBarsKey(selectedKeyForRequest); } })
-			.catch((loadError) => { if (!cancelled) setBarsError(loadError instanceof Error ? loadError.message : '统一行情日线暂不可用'); })
+			.catch(async (loadError) => {
+                if (cancelled) return;
+                const message = loadError instanceof Error ? loadError.message : '统一行情日线暂不可用';
+                try {
+                    const local = await requestJSON<{ data: KLine[] }>(config, `/api/v1/market-data/stocks/${selected.market}/${encodeURIComponent(selected.symbol)}/bars?limit=60`);
+                    if (!cancelled) { setBars(local.data || []); setBarsKey(selectedKeyForRequest); setBarsError(message); }
+                } catch { if (!cancelled) setBarsError(message); }
+            })
 			.finally(() => { if (!cancelled) setBarsLoading(false); });
 		if (selected.market === 'CN') {
 			void requestJSON<{ data: Quote[] }>(config, `/api/v1/quotes/realtime?symbols=${encodeURIComponent(selected.symbol)}`)

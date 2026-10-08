@@ -84,7 +84,7 @@ func (p *Provider) MarketIndexSeries(ctx context.Context, id string, period stri
 
 func (p *Provider) IndustryMomentum(ctx context.Context, limit int) ([]foundation.MarketIndustryMomentum, foundation.SourceMeta, error) {
 	items, meta, err := p.primary.IndustryMomentum(ctx, limit)
-	if err == nil && len(meta.AvailableFields) >= fullIndustryMomentumFieldCount {
+	if err == nil && len(items) > 0 && len(meta.AvailableFields) >= fullIndustryMomentumFieldCount {
 		return items, meta, nil
 	}
 	if p.industryProvider == nil {
@@ -92,7 +92,7 @@ func (p *Provider) IndustryMomentum(ctx context.Context, limit int) ([]foundatio
 	}
 
 	fallbackItems, fallbackMeta, fallbackErr := p.industryProvider.IndustryMomentum(ctx, limit)
-	if fallbackErr == nil && (!fallbackMeta.Stale && (err != nil || meta.Stale || len(fallbackMeta.AvailableFields) > len(meta.AvailableFields))) {
+	if fallbackErr == nil && len(fallbackItems) > 0 && (!fallbackMeta.Stale && (err != nil || len(items) == 0 || meta.Stale || len(fallbackMeta.AvailableFields) > len(meta.AvailableFields))) {
 		fallbackMeta.FallbackReason = joinFallbackReason("东方财富行业字段不完整，已切换到字段覆盖更高的腾讯数据", fallbackMeta.FallbackReason)
 		for index := range fallbackItems {
 			fallbackItems[index].Meta = fallbackMeta

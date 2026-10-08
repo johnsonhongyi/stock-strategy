@@ -510,6 +510,7 @@ func TestServerUsesKaipanlaSnapshotForOverviewAndThemeScreen(t *testing.T) {
 		DuanxianxiaBaseURL: remote.URL,
 		ThemeRadarFallback: fakeServerRadarFallback{},
 	})
+	t.Cleanup(func() { _ = server.Close() })
 	overviewRequest := httptest.NewRequest(http.MethodGet, "/api/v1/themes/overview", nil)
 	overviewRecorder := httptest.NewRecorder()
 	server.ServeHTTP(overviewRecorder, overviewRequest)

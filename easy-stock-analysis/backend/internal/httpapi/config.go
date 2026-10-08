@@ -11,6 +11,7 @@ import (
 	"easy-stock/backend/internal/hermes"
 	"easy-stock/backend/internal/marketbars"
 	"easy-stock/backend/internal/marketemotion"
+	"easy-stock/backend/internal/marketnetwork"
 	"easy-stock/backend/internal/methodology"
 	"easy-stock/backend/internal/portfolioinspection"
 	"easy-stock/backend/internal/review"
@@ -145,6 +146,7 @@ type Config struct {
 	MasteryLibrary       *methodology.Library
 	Logger               *log.Logger
 	StrictPersistence    bool
+	MarketNetwork        *marketnetwork.Config
 	MarketCacheTransport http.RoundTripper
 }
 
