@@ -190,7 +190,8 @@ func (c *Client) IndustryMomentum(ctx context.Context, limit int) ([]foundation.
 			Diff []map[string]any `json:"diff"`
 		} `json:"data"`
 	}
-	if err := c.getJSONWithRetry(ctx, requestURL, &payload); err != nil || payload.RC != 0 || len(payload.Data.Diff) == 0 {
+	cacheState, requestErr := c.getJSONWithRetryCacheState(ctx, requestURL, &payload)
+	if err := requestErr; err != nil || payload.RC != 0 || len(payload.Data.Diff) == 0 {
 		boards, fallbackErr := c.boardsFromFundFlow(ctx, "", limit, firstError(err, fmt.Errorf("eastmoney industry momentum unavailable")))
 		if fallbackErr != nil {
 			return nil, foundation.SourceMeta{}, fallbackErr
@@ -210,7 +211,7 @@ func (c *Client) IndustryMomentum(ctx context.Context, limit int) ([]foundation.
 		}
 		return items, meta, nil
 	}
-	meta := foundation.SourceMeta{Source: "eastmoney:industry-momentum", SourceURL: requestURL, AvailableFields: eastmoneyIndustryMomentumFields, FetchedAt: time.Now(), LatencyMS: time.Since(start).Milliseconds()}
+	meta := foundation.SourceMeta{Source: "eastmoney:industry-momentum", SourceURL: requestURL, AvailableFields: eastmoneyIndustryMomentumFields, FetchedAt: time.Now(), LatencyMS: time.Since(start).Milliseconds(), Stale: strings.EqualFold(cacheState, "STALE")}
 	items := make([]foundation.MarketIndustryMomentum, 0, len(payload.Data.Diff))
 	for _, raw := range payload.Data.Diff {
 		change := asFloat(raw["f3"])

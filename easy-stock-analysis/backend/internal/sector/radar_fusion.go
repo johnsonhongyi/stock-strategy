@@ -11,6 +11,7 @@ import (
 	"easy-stock/backend/internal/foundation"
 	"easy-stock/backend/internal/narrative"
 	"easy-stock/backend/internal/providers/duanxianxia"
+	"easy-stock/backend/internal/tradingcalendar"
 )
 
 const (
@@ -617,6 +618,14 @@ func fusedRadarMeta(
 		fetchedAt = industryMeta.FetchedAt
 	}
 	tradeDate := firstNonEmptyRadar(industryMeta.TradeDate, snapshot.TradeDate, shanghaiDate(now))
+	if hasIndustry && !industryMeta.Stale && !industryMeta.FetchedAt.IsZero() {
+		inSession, sessionErr := tradingcalendar.IsTradingSession("CN", now)
+		completedDate, completedErr := tradingcalendar.LatestCompletedDate("CN", now)
+		today := shanghaiDate(now)
+		if (sessionErr == nil && inSession) || (completedErr == nil && completedDate == today) {
+			tradeDate = today
+		}
+	}
 	carryForward := hasKaipanla && snapshot.TradeDate != shanghaiDate(now)
 	reasons := []string{}
 	if snapshotErr != nil {
@@ -624,6 +633,9 @@ func fusedRadarMeta(
 	}
 	if industryErr != nil {
 		reasons = append(reasons, industryErr.Error())
+	}
+	if industryMeta.Stale {
+		reasons = append(reasons, "行业行情使用过期缓存")
 	}
 	if strings.TrimSpace(fetchMeta.RefreshError) != "" {
 		reasons = append(reasons, fetchMeta.RefreshError)

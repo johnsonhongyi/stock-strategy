@@ -153,6 +153,7 @@ func main() {
 	go server.RunReviewScheduler(ctx)
 	go server.RunRemoteDailyReviewScheduler(ctx)
 	go server.RunMarketEmotionScheduler(ctx)
+	go server.RunLiveMarketScheduler(ctx)
 	go server.RunMasteryScheduler(ctx)
 	httpServer := &http.Server{Addr: addr, Handler: server}
 	go func() {

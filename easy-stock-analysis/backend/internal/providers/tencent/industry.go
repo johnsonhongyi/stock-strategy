@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"easy-stock/backend/internal/foundation"
@@ -48,7 +49,8 @@ func (c *Client) IndustryMomentum(ctx context.Context, limit int) ([]foundation.
 			LeaderChange  string `json:"nzg_zdf"`
 		} `json:"data"`
 	}
-	if err := c.getIndustryJSON(ctx, requestURL, &payload); err != nil {
+	cacheState, err := c.getIndustryJSONCacheState(ctx, requestURL, &payload)
+	if err != nil {
 		return nil, foundation.SourceMeta{}, err
 	}
 	if payload.Code != 0 || len(payload.Data) == 0 {
@@ -56,7 +58,7 @@ func (c *Client) IndustryMomentum(ctx context.Context, limit int) ([]foundation.
 	}
 	meta := foundation.SourceMeta{
 		Source: "tencent:industry-rank", SourceURL: requestURL, AvailableFields: industryMomentumFields,
-		FetchedAt: time.Now(), LatencyMS: time.Since(start).Milliseconds(),
+		FetchedAt: time.Now(), LatencyMS: time.Since(start).Milliseconds(), Stale: strings.EqualFold(cacheState, "STALE"),
 	}
 	items := make([]foundation.MarketIndustryMomentum, 0, len(payload.Data))
 	for _, raw := range payload.Data {
@@ -77,21 +79,29 @@ func (c *Client) IndustryMomentum(ctx context.Context, limit int) ([]foundation.
 }
 
 func (c *Client) getIndustryJSON(ctx context.Context, requestURL string, target any) error {
+	_, err := c.getIndustryJSONCacheState(ctx, requestURL, target)
+	return err
+}
+
+func (c *Client) getIndustryJSONCacheState(ctx context.Context, requestURL string, target any) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Referer", "https://stockapp.finance.qq.com/")
 	req.Header.Set("User-Agent", "Mozilla/5.0 easy-stock/0.1")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("tencent industry http status %d", resp.StatusCode)
+		return resp.Header.Get("X-Stock-Cache"), fmt.Errorf("tencent industry http status %d", resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(target)
+	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+		return resp.Header.Get("X-Stock-Cache"), err
+	}
+	return resp.Header.Get("X-Stock-Cache"), nil
 }
 
 func tencentIndustryScore(change, fiveDay, twentyDay float64) float64 {

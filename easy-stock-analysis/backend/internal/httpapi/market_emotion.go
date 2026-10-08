@@ -46,13 +46,14 @@ type marketEmotionIntradayFlight struct {
 }
 
 type marketEmotionIntradayCache struct {
-	mu        sync.Mutex
-	ttl       time.Duration
-	now       func() time.Time
-	snapshot  marketemotion.IntradaySnapshot
-	expiresAt time.Time
-	lastErr   error
-	inflight  *marketEmotionIntradayFlight
+	mu            sync.Mutex
+	ttl           time.Duration
+	now           func() time.Time
+	snapshot      marketemotion.IntradaySnapshot
+	expiresAt     time.Time
+	lastAttemptAt time.Time
+	lastErr       error
+	inflight      *marketEmotionIntradayFlight
 }
 
 func newMarketEmotionIntradayCache(ttl time.Duration) *marketEmotionIntradayCache {
@@ -90,15 +91,16 @@ func (c *marketEmotionIntradayCache) load(
 
 	snapshot, err := loader(ctx)
 	computedAt := c.now()
+	c.mu.Lock()
+	ttl := c.ttl
 	if err == nil {
 		snapshot.UpdatedAt = computedAt
-		snapshot.NextRefreshAt = computedAt.Add(c.ttl)
-		snapshot.CacheTTLSecond = int(c.ttl / time.Second)
+		snapshot.NextRefreshAt = computedAt.Add(ttl)
+		snapshot.CacheTTLSecond = int(ttl / time.Second)
 	}
-
-	c.mu.Lock()
 	c.inflight = nil
-	c.expiresAt = computedAt.Add(c.ttl)
+	c.lastAttemptAt = computedAt
+	c.expiresAt = computedAt.Add(ttl)
 	if err == nil {
 		c.snapshot = snapshot
 		c.lastErr = nil
@@ -118,6 +120,33 @@ func (c *marketEmotionIntradayCache) load(
 	close(flight.done)
 	c.mu.Unlock()
 	return flight.snapshot, flight.err
+}
+
+func (c *marketEmotionIntradayCache) setTTL(ttl time.Duration) {
+	if c == nil || ttl <= 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ttl = ttl
+	base := c.lastAttemptAt
+	if base.IsZero() {
+		base = c.snapshot.UpdatedAt
+	}
+	if !base.IsZero() {
+		c.expiresAt = base.Add(ttl)
+		c.snapshot.NextRefreshAt = c.expiresAt
+		c.snapshot.CacheTTLSecond = int(ttl / time.Second)
+	}
+}
+
+func (c *marketEmotionIntradayCache) lastError() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastErr
 }
 
 func newMarketEmotionEngine(
@@ -159,13 +188,7 @@ func (s *Server) marketEmotionHistoryHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if s.marketEmotionIntraday != nil && s.limitUpSnapshots != nil && s.limitUpProvider != nil {
-		intraday, intradayErr := s.marketEmotionIntraday.load(ctx, func(loadCtx context.Context) (marketemotion.IntradaySnapshot, error) {
-			ladder, loadErr := s.limitUpSnapshots.load(loadCtx, s.limitUpProvider, s.stockConcepts, s.realtimeProvider)
-			if loadErr != nil {
-				return marketemotion.IntradaySnapshot{}, loadErr
-			}
-			return buildMarketEmotionIntraday(ladder, history.Latest), nil
-		})
+		intraday, intradayErr := s.refreshMarketEmotionIntraday(ctx, history.Latest)
 		if intradayErr != nil {
 			history.IntradayError = intradayErr.Error()
 		} else {
@@ -173,6 +196,19 @@ func (s *Server) marketEmotionHistoryHandler(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": history})
+}
+
+func (s *Server) refreshMarketEmotionIntraday(ctx context.Context, latest *marketemotion.Snapshot) (marketemotion.IntradaySnapshot, error) {
+	if s == nil || s.marketEmotionIntraday == nil || s.limitUpSnapshots == nil || s.limitUpProvider == nil {
+		return marketemotion.IntradaySnapshot{}, fmt.Errorf("intraday market signal service is unavailable")
+	}
+	return s.marketEmotionIntraday.load(ctx, func(loadCtx context.Context) (marketemotion.IntradaySnapshot, error) {
+		ladder, err := s.limitUpSnapshots.load(loadCtx, s.limitUpProvider, s.stockConcepts, s.realtimeProvider)
+		if err != nil {
+			return marketemotion.IntradaySnapshot{}, err
+		}
+		return buildMarketEmotionIntraday(ladder, latest), nil
+	})
 }
 
 type emotionHistoryFlight struct {

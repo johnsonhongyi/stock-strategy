@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"easy-stock/backend/internal/foundation"
+	"easy-stock/backend/internal/tradingcalendar"
 )
 
 type progressiveThemeProvider interface {
@@ -16,16 +17,20 @@ type progressiveThemeProvider interface {
 }
 
 type themeProgressCache struct {
-	mu        sync.Mutex
-	value     foundation.ThemeProgress
-	startedAt time.Time
-	cancel    context.CancelFunc
-	done      chan struct{}
-	closed    bool
+	mu              sync.Mutex
+	value           foundation.ThemeProgress
+	startedAt       time.Time
+	refreshInterval time.Duration
+	cancel          context.CancelFunc
+	done            chan struct{}
+	closed          bool
 }
 
 func newThemeProgressCache() *themeProgressCache {
-	return &themeProgressCache{value: foundation.ThemeProgress{Data: []foundation.ThemeOverview{}, Steps: map[string]string{}, Errors: map[string]string{}, Stage: "base"}}
+	return &themeProgressCache{
+		value:           foundation.ThemeProgress{Data: []foundation.ThemeOverview{}, Steps: map[string]string{}, Errors: map[string]string{}, Stage: "base"},
+		refreshInterval: 15 * time.Minute,
+	}
 }
 
 func (s *Server) progressiveThemeOverview(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +38,16 @@ func (s *Server) progressiveThemeOverview(w http.ResponseWriter, r *http.Request
 	c.mu.Lock()
 	// Polling is read-only. A fresh entry/explicit refresh can start one bounded job.
 	poll := r.URL.Query().Get("refresh_id") != "" && c.value.RefreshID != ""
-	if !c.closed && !poll && !c.value.Refreshing && (r.URL.Query().Get("refresh") == "1" || c.startedAt.IsZero() || time.Since(c.startedAt) > 30*time.Second) {
+	refreshInterval := c.refreshInterval
+	if refreshInterval <= 0 {
+		refreshInterval = 15 * time.Minute
+	}
+	autoRefreshDue := c.startedAt.IsZero()
+	if !autoRefreshDue && time.Since(c.startedAt) >= refreshInterval {
+		inSession, err := tradingcalendar.IsTradingSession("CN", time.Now())
+		autoRefreshDue = err == nil && inSession
+	}
+	if !c.closed && !poll && !c.value.Refreshing && (r.URL.Query().Get("refresh") == "1" || autoRefreshDue) {
 		c.startedAt = time.Now()
 		c.value.RefreshID = fmt.Sprintf("radar-%d", time.Now().UnixNano())
 		c.value.Refreshing = true
@@ -48,6 +62,50 @@ func (s *Server) progressiveThemeOverview(w http.ResponseWriter, r *http.Request
 	value := c.value
 	c.mu.Unlock()
 	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) setThemeRefreshInterval(interval time.Duration) {
+	if s == nil || s.themeProgress == nil || interval <= 0 {
+		return
+	}
+	s.themeProgress.mu.Lock()
+	s.themeProgress.refreshInterval = interval
+	s.themeProgress.mu.Unlock()
+}
+
+func (s *Server) refreshThemeProgressNow(ctx context.Context) (foundation.ThemeProgress, bool) {
+	if s == nil || s.themeProgress == nil || s.themeOverview == nil {
+		return foundation.ThemeProgress{}, false
+	}
+	c := s.themeProgress
+	c.mu.Lock()
+	if c.closed || c.value.Refreshing {
+		value := c.value
+		c.mu.Unlock()
+		return value, false
+	}
+	id := fmt.Sprintf("radar-%d", time.Now().UnixNano())
+	c.startedAt = time.Now()
+	c.value.RefreshID = id
+	c.value.Refreshing = true
+	c.value.Revision++
+	c.value.Steps = map[string]string{"industry": "loading", "kaipanla": "loading", "strength": "loading"}
+	c.value.Errors = map[string]string{}
+	refreshCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	c.cancel = cancel
+	done := make(chan struct{})
+	c.done = done
+	c.mu.Unlock()
+
+	go s.refreshThemeProgress(refreshCtx, id, done)
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+	c.mu.Lock()
+	value := c.value
+	c.mu.Unlock()
+	return value, true
 }
 
 func (s *Server) refreshThemeProgress(ctx context.Context, id string, done chan struct{}) {

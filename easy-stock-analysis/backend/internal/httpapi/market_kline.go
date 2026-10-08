@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -16,10 +17,10 @@ import (
 )
 
 type marketFirstKLineProvider struct {
-	store    *marketbars.Store
-	primary  KLineProvider
-	fallback KLineProvider
-	logger   *log.Logger
+	store           *marketbars.Store
+	primary         KLineProvider
+	fallback        KLineProvider
+	logger          *log.Logger
 	refreshMu       sync.Mutex
 	refreshAttempts map[string]refreshAttempt
 }
@@ -51,14 +52,20 @@ func (p *marketFirstKLineProvider) daily(ctx context.Context, symbol string, mar
 		p.logf("market data read failed for %s: %v", symbol, readErr)
 		found = false
 	}
-	forceRefresh := marketcache.RefreshFromContext(ctx)
-	if found && !forceRefresh {
-		stale, expected, calendarErr := klineCacheBehindLatestSession(cached, market)
-		if calendarErr != nil {
-			p.logf("trading calendar unavailable for %s: %v", symbol, calendarErr)
+	var expected string
+	if filtered, date, err := completedDailyKLines(cached, market); err == nil {
+		cached, expected = filtered, date
+		found = found && len(cached) > 0
+	} else {
+		p.logf("trading calendar unavailable for %s: %v", symbol, err)
+		if found {
 			return cached, nil
 		}
-		if !stale {
+		return nil, err
+	}
+	forceRefresh := marketcache.RefreshFromContext(ctx)
+	if found && !forceRefresh {
+		if !dailyBarsBehind(cached, expected) {
 			return cached, nil
 		}
 		if !p.claimSessionRefresh(market, symbol, expected) {
@@ -74,12 +81,20 @@ func (p *marketFirstKLineProvider) daily(ctx context.Context, symbol string, mar
 		}
 		return nil, err
 	}
-	if len(lines) > 0 {
-		if err := p.store.UpsertDaily(ctx, symbol, market, lines); err != nil {
-			p.logf("market data write failed for %s: %v", symbol, err)
+	lines, expected, err = completedDailyKLines(lines, market)
+	if err != nil {
+		if found {
+			return markKLinesStale(cached, err), nil
 		}
+		return nil, err
 	}
-	if stale, expected, calendarErr := klineCacheBehindLatestSession(lines, market); calendarErr == nil && stale {
+	if len(lines) == 0 {
+		if found {
+			return markKLinesStale(cached, fmt.Errorf("upstream returned no completed daily bars for %s", expected)), nil
+		}
+		return nil, fmt.Errorf("upstream returned no completed daily bars for %s", expected)
+	}
+	if dailyBarsBehind(lines, expected) {
 		return markKLinesStale(lines, fmt.Errorf("upstream data has not reached the completed %s session %s", market, expected)), nil
 	}
 	return lines, nil
@@ -92,15 +107,20 @@ func (p *marketFirstKLineProvider) derivedPeriod(ctx context.Context, symbol str
 		p.logf("market data read failed for %s: %v", symbol, readErr)
 		found = false
 	}
+	expected, calendarErr := latestCompletedDailyDate(market)
+	if calendarErr != nil {
+		p.logf("trading calendar unavailable for %s: %v", symbol, calendarErr)
+		if found {
+			return lastKLines(aggregateDailyKLines(cached, period), limit), nil
+		}
+		return nil, calendarErr
+	}
+	cached, _, _ = completedDailyKLinesAt(cached, expected)
+	found = found && len(cached) > 0
 	derived := aggregateDailyKLines(cached, period)
 	forceRefresh := marketcache.RefreshFromContext(ctx)
 	if found && !forceRefresh && len(derived) > 0 {
-		stale, expected, calendarErr := klineCacheBehindLatestSession(cached, market)
-		if calendarErr != nil {
-			p.logf("trading calendar unavailable for %s: %v", symbol, calendarErr)
-			return lastKLines(derived, limit), nil
-		}
-		if !stale {
+		if !dailyBarsBehind(cached, expected) {
 			return lastKLines(derived, limit), nil
 		}
 		if !p.claimSessionRefresh(market, symbol, expected) {
@@ -116,39 +136,87 @@ func (p *marketFirstKLineProvider) derivedPeriod(ctx context.Context, symbol str
 		}
 		return nil, err
 	}
-	if err := p.store.UpsertDaily(ctx, symbol, market, lines); err != nil {
-		p.logf("market data write failed for %s: %v", symbol, err)
+	lines, expected, err = completedDailyKLinesAt(lines, expected)
+	if err != nil {
+		return nil, err
+	}
+	if len(lines) == 0 && len(cached) == 0 {
+		return nil, fmt.Errorf("upstream returned no completed daily bars for %s", expected)
 	}
 
 	allDaily := mergeDailyKLines(cached, lines)
-	if persisted, persistedFound, persistErr := p.store.ReadDaily(ctx, symbol, market, dailyLimit); persistErr == nil && persistedFound {
-		allDaily = persisted
-	} else if persistErr != nil {
-		p.logf("market data reread failed for %s: %v", symbol, persistErr)
-	}
 	result := lastKLines(aggregateDailyKLines(allDaily, period), limit)
-	if stale, expected, calendarErr := klineCacheBehindLatestSession(allDaily, market); calendarErr == nil && stale {
+	if dailyBarsBehind(allDaily, expected) {
 		return markKLinesStale(result, fmt.Errorf("local daily bars have not reached the completed %s session %s", market, expected)), nil
 	}
 	return result, nil
 }
 
-func klineCacheBehindLatestSession(lines []foundation.KLine, market string) (bool, string, error) {
-	expected, err := tradingcalendar.LatestCompletedDate(market, time.Now())
-	if err != nil {
-		return false, "", err
+func latestCompletedDailyDate(market string) (string, error) {
+	now := time.Now()
+	if strings.EqualFold(strings.TrimSpace(market), "CN") || strings.TrimSpace(market) == "" {
+		// Wait for the close-job window before treating today's A-share daily bar
+		// as complete. The scheduled append job runs at 15:40 China time.
+		chinaNow := now.In(shanghaiLocation)
+		cutoff := time.Date(chinaNow.Year(), chinaNow.Month(), chinaNow.Day(), 15, 40, 0, 0, shanghaiLocation)
+		if chinaNow.Before(cutoff) {
+			now = now.Add(-40 * time.Minute)
+		}
 	}
-	latest := ""
+	return tradingcalendar.LatestCompletedDate(market, now)
+}
+
+func completedDailyKLines(lines []foundation.KLine, market string) ([]foundation.KLine, string, error) {
+	expected, err := latestCompletedDailyDate(market)
+	if err != nil {
+		return nil, "", err
+	}
+	filtered, _, err := completedDailyKLinesAt(lines, expected)
+	return filtered, expected, err
+}
+
+func completedDailyKLinesAt(lines []foundation.KLine, expected string) ([]foundation.KLine, string, error) {
+	byDate := make(map[string]foundation.KLine, len(lines))
 	for _, line := range lines {
-		if line.Time.IsZero() {
+		if !validCompletedDailyKLine(line) {
 			continue
 		}
 		date := line.Time.Format("2006-01-02")
-		if date > latest {
+		if date > expected {
+			continue
+		}
+		byDate[date] = line
+	}
+	filtered := make([]foundation.KLine, 0, len(byDate))
+	for _, line := range byDate {
+		filtered = append(filtered, line)
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].Time.Before(filtered[j].Time) })
+	return filtered, expected, nil
+}
+
+func validCompletedDailyKLine(line foundation.KLine) bool {
+	if line.Time.IsZero() {
+		return false
+	}
+	for _, value := range []float64{line.Open, line.High, line.Low, line.Close, line.PreviousClose, line.Volume, line.Amount} {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return false
+		}
+	}
+	return line.Open > 0 && line.Low > 0 && line.Close > 0 && line.High >= line.Low &&
+		line.High >= line.Open && line.High >= line.Close && line.Low <= line.Open && line.Low <= line.Close &&
+		line.PreviousClose >= 0 && line.Volume >= 0 && line.Amount >= 0
+}
+
+func dailyBarsBehind(lines []foundation.KLine, expected string) bool {
+	latest := ""
+	for _, line := range lines {
+		if date := line.Time.Format("2006-01-02"); !line.Time.IsZero() && date > latest {
 			latest = date
 		}
 	}
-	return latest == "" || latest < expected, expected, nil
+	return latest == "" || latest < expected
 }
 
 func (p *marketFirstKLineProvider) claimSessionRefresh(market string, symbol string, session string) bool {

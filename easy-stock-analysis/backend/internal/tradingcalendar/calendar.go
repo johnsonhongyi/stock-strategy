@@ -16,9 +16,9 @@ type dateRange struct {
 }
 
 type marketOverrides struct {
-	ClosedRanges       []dateRange `json:"closed_ranges"`
-	ManualClosedDates  []string    `json:"manual_closed_dates"`
-	ManualOpenDates    []string    `json:"manual_open_dates"`
+	ClosedRanges      []dateRange `json:"closed_ranges"`
+	ManualClosedDates []string    `json:"manual_closed_dates"`
+	ManualOpenDates   []string    `json:"manual_open_dates"`
 }
 
 type calendarFile struct {
@@ -171,6 +171,39 @@ func IsTradingDate(dateString string, market string) (bool, error) {
 		return false, err
 	}
 	return isTradingDate(date, market, calendar)
+}
+
+// IsTradingSession reports whether the given instant falls inside an exchange's
+// continuous trading session. It uses the same calendar overrides as daily-bar
+// freshness checks so schedulers do not run on weekends or exchange holidays.
+func IsTradingSession(market string, now time.Time) (bool, error) {
+	market = strings.ToUpper(strings.TrimSpace(market))
+	location := time.FixedZone("Asia/Shanghai", 8*60*60)
+	if market == "US" {
+		var err error
+		location, err = time.LoadLocation("America/New_York")
+		if err != nil {
+			return false, fmt.Errorf("load US exchange timezone: %w", err)
+		}
+	} else if market == "CRYPTO" {
+		return true, nil
+	} else {
+		market = "CN"
+	}
+	localNow := now.In(location)
+	calendar, err := loadCalendar()
+	if err != nil {
+		return false, err
+	}
+	open, err := isTradingDate(localNow, market, calendar)
+	if err != nil || !open {
+		return false, err
+	}
+	minute := localNow.Hour()*60 + localNow.Minute()
+	if market == "US" {
+		return minute >= 9*60+30 && minute < 16*60, nil
+	}
+	return (minute >= 9*60+30 && minute < 11*60+30) || (minute >= 13*60 && minute < 15*60), nil
 }
 
 func isTradingDate(date time.Time, market string, calendar calendarFile) (bool, error) {

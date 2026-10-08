@@ -119,7 +119,7 @@ def _latest_expected_session_cn():
     from trading_calendar import is_trading_day, prev_trading_day, today_str
     local_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
     expected = today_str("CN")
-    if local_now.strftime("%H:%M") < "15:30" or not is_trading_day(expected, "CN"):
+    if local_now.strftime("%H:%M") < "15:40" or not is_trading_day(expected, "CN"):
         expected = prev_trading_day(expected, market="CN")
     return expected
 
@@ -202,6 +202,8 @@ def _fetch_history(codes):
                     if not parsed:
                         continue
                     day, opened, high, low, close, previous, volume, amount = parsed
+                    if day > expected_date:
+                        continue  # never persist an unfinished or future daily candle
                     c.execute("""INSERT INTO daily_bars
                         (code,date,open,high,low,close,prev_close,volume,amount,source,market)
                         VALUES(?,?,?,?,?,?,?,?,?,'backfill','CN')
@@ -349,8 +351,8 @@ def append_today():
     from zoneinfo import ZoneInfo
     _now_sh = datetime.datetime.now(ZoneInfo("Asia/Shanghai"))
     now = _now_sh.strftime("%H:%M")
-    if now < "15:30":
-        print("too early (%s), wait until after 15:30 for final bars" % now)
+    if now < "15:40":
+        print("too early (%s), wait until 15:40 for final bars" % now)
         return
     today = _now_sh.date().isoformat()
     c = db()

@@ -113,6 +113,12 @@ func cacheableRequest(req *http.Request) bool {
 	if (req.Method != http.MethodGet && req.Method != http.MethodPost) || req.URL == nil || req.URL.Host == "" {
 		return false
 	}
+	// Daily bars are persisted by the verified after-close append job only.
+	// Bypass this request cache so intraday partial candles cannot be retained
+	// and later mistaken for a completed daily bar during stale fallback.
+	if isDailyKLineRequest(req) {
+		return false
+	}
 	if req.URL.User != nil {
 		return false
 	}
@@ -128,6 +134,25 @@ func cacheableRequest(req *http.Request) bool {
 	}
 	control := strings.ToLower(req.Header.Get("Cache-Control"))
 	return !strings.Contains(control, "no-cache") && !strings.Contains(control, "no-store")
+}
+
+func isDailyKLineRequest(req *http.Request) bool {
+	if req == nil || req.URL == nil {
+		return false
+	}
+	path := strings.ToLower(req.URL.Path)
+	query := req.URL.Query()
+	if !strings.Contains(path, "kline") && query.Get("klt") == "" && query.Get("scale") == "" &&
+		!strings.HasSuffix(path, "/ohlc") && !strings.HasSuffix(path, "/chart") {
+		return false
+	}
+	for _, value := range []string{query.Get("period"), query.Get("interval"), query.Get("klt"), query.Get("scale")} {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "day", "daily", "1d", "d", "101", "240":
+			return true
+		}
+	}
+	return false
 }
 
 func cacheKey(req *http.Request) string {

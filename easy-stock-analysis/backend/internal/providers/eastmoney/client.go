@@ -192,39 +192,54 @@ func (c *Client) KLine(ctx context.Context, symbol string, period string, limit 
 }
 
 func (c *Client) getJSONWithRetry(ctx context.Context, requestURL string, target any) error {
+	_, err := c.getJSONWithRetryCacheState(ctx, requestURL, target)
+	return err
+}
+
+func (c *Client) getJSONWithRetryCacheState(ctx context.Context, requestURL string, target any) (string, error) {
 	var lastErr error
+	cacheState := ""
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(150 * time.Millisecond)
 		}
-		err := c.getJSON(ctx, requestURL, target)
+		state, err := c.getJSONCacheState(ctx, requestURL, target)
 		if err == nil {
-			return nil
+			return state, nil
 		}
+		cacheState = state
 		lastErr = err
 		if !isTransient(err) {
-			return err
+			return cacheState, err
 		}
 	}
-	return lastErr
+	return cacheState, lastErr
 }
 
 func (c *Client) getJSON(ctx context.Context, requestURL string, target any) error {
+	_, err := c.getJSONCacheState(ctx, requestURL, target)
+	return err
+}
+
+func (c *Client) getJSONCacheState(ctx context.Context, requestURL string, target any) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 easy-stock/0.1")
 	req.Header.Set("Referer", "https://quote.eastmoney.com/")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("eastmoney http status %d", resp.StatusCode)
+		return resp.Header.Get("X-Stock-Cache"), fmt.Errorf("eastmoney http status %d", resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(target)
+	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+		return resp.Header.Get("X-Stock-Cache"), err
+	}
+	return resp.Header.Get("X-Stock-Cache"), nil
 }
 
 func isTransient(err error) bool {
