@@ -80,6 +80,8 @@ type Server struct {
 	masteryLibrary        *methodology.Library
 	marketEmotionStore    *marketemotion.Store
 	marketBars            *marketbars.Store
+	liveMarketRuntime     *liveMarketRuntimeState
+	startedAt             time.Time
 	themeRadarStore       *duanxianxia.Store
 	themeProgress         *themeProgressCache
 	startupError          error
@@ -345,6 +347,8 @@ func NewServer(config any) *Server {
 		masteryLibrary:        cfg.MasteryLibrary,
 		marketEmotionStore:    cfg.MarketEmotionStore,
 		marketBars:            cfg.MarketDataStore,
+		liveMarketRuntime:     newLiveMarketRuntimeState(),
+		startedAt:             time.Now(),
 		startupError:          errors.Join(startupErrors...),
 		logger:                cfg.Logger,
 		tokenUsage:            tokenUsage,
@@ -523,6 +527,7 @@ func (s *Server) refreshMasterySnapshot(ctx context.Context, force bool) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.health)
+	s.mux.HandleFunc("GET /api/v1/system/status", s.systemStatus)
 	s.mux.HandleFunc("GET /api/v1/sources", s.sources)
 	s.mux.HandleFunc("GET /api/v1/quotes/realtime", s.realtime)
 	s.mux.HandleFunc("GET /api/v1/quotes/kline", s.kline)

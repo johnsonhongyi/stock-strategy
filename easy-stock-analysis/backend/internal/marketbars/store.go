@@ -20,6 +20,13 @@ type Store struct {
 	db *sql.DB
 }
 
+type DailyMarketSummary struct {
+	Market      string `json:"market"`
+	Rows        int64  `json:"rows"`
+	LatestDate  string `json:"latest_date,omitempty"`
+	InvalidRows int64  `json:"invalid_rows"`
+}
+
 type marketContextKey struct{}
 
 func WithMarket(ctx context.Context, market string) context.Context {
@@ -119,6 +126,33 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+func (s *Store) DailySummary(ctx context.Context) ([]DailyMarketSummary, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("market data database is unavailable")
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT UPPER(COALESCE(NULLIF(market,''),'CN')), COUNT(*),
+		COALESCE(MAX(date),''), SUM(CASE WHEN open IS NULL OR high IS NULL OR low IS NULL OR close IS NULL
+			OR open<=0 OR high<low OR low<=0 OR close<=0 OR high<open OR high<close OR low>open OR low>close
+			THEN 1 ELSE 0 END)
+		FROM daily_bars GROUP BY 1 ORDER BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []DailyMarketSummary
+	for rows.Next() {
+		var item DailyMarketSummary
+		if err := rows.Scan(&item.Market, &item.Rows, &item.LatestDate, &item.InvalidRows); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *Store) ReadDaily(ctx context.Context, symbol string, requestedMarket string, limit int) ([]foundation.KLine, bool, error) {

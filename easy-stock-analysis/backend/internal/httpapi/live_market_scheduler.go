@@ -43,6 +43,19 @@ func (s *Server) RunLiveMarketScheduler(ctx context.Context) {
 	if s == nil {
 		return
 	}
+	startedAt := time.Now()
+	s.updateLiveMarketStatus(func(status *liveMarketStatusSnapshot) {
+		status.Running = true
+		status.State = "waiting-session"
+		status.StartedAt = timePointer(startedAt)
+		status.LastError = ""
+	})
+	defer s.updateLiveMarketStatus(func(status *liveMarketStatusSnapshot) {
+		status.Running = false
+		status.SessionActive = false
+		status.State = "stopped"
+		status.NextRunAt = nil
+	})
 	if s.logger != nil {
 		s.logger.Printf("level=info event=scheduler_start feature=live-market task=adaptive-refresh")
 		defer s.logger.Printf("level=info event=scheduler_stop feature=live-market task=adaptive-refresh")
@@ -59,16 +72,35 @@ func (s *Server) RunLiveMarketScheduler(ctx context.Context) {
 		case <-ticker.C:
 		}
 		now := time.Now()
+		sample := monitor.sample(now)
+		s.updateLiveMarketStatus(func(status *liveMarketStatusSnapshot) {
+			status.LastCheckAt = timePointer(now)
+			status.MemoryPercent = sample.memoryPercent
+			status.CPUPercent = sample.cpuPercent
+			status.CPUKnown = sample.cpuKnown
+		})
 		inSession, err := tradingcalendar.IsTradingSession("CN", now)
 		if err != nil {
+			s.updateLiveMarketStatus(func(status *liveMarketStatusSnapshot) {
+				status.SessionActive = false
+				status.State = "calendar-error"
+				status.IntervalReason = "trading-calendar-unavailable"
+				status.NextRunAt = nil
+				status.LastError = runtimelog.Redact(err.Error())
+			})
 			s.logLiveSchedulerError("trading-calendar", err)
 			continue
 		}
 		if !inSession {
+			s.updateLiveMarketStatus(func(status *liveMarketStatusSnapshot) {
+				status.SessionActive = false
+				status.State = "waiting-session"
+				status.IntervalReason = "outside-trading-session"
+				status.NextRunAt = nil
+			})
 			continue
 		}
 
-		sample := monitor.sample(now)
 		interval, reason := state.intervalFor(sample, now)
 		if interval != state.interval {
 			state.interval = interval
@@ -84,10 +116,26 @@ func (s *Server) RunLiveMarketScheduler(ctx context.Context) {
 				state.nextRun = state.lastRun.Add(interval)
 			}
 		}
+		s.updateLiveMarketStatus(func(status *liveMarketStatusSnapshot) {
+			status.SessionActive = true
+			status.MemoryPercent = sample.memoryPercent
+			status.CPUPercent = sample.cpuPercent
+			status.CPUKnown = sample.cpuKnown
+			status.IntervalMinutes = int(interval / time.Minute)
+			status.IntervalReason = reason
+			status.NextRunAt = timePointer(state.nextRun)
+		})
 		if !state.nextRun.IsZero() && now.Before(state.nextRun) {
+			s.updateLiveMarketStatus(func(status *liveMarketStatusSnapshot) {
+				status.State = "scheduled"
+			})
 			continue
 		}
 
+		s.updateLiveMarketStatus(func(status *liveMarketStatusSnapshot) {
+			status.State = "running"
+			status.NextRunAt = nil
+		})
 		runCtx, cancel := context.WithTimeout(ctx, liveMarketRefreshTimeout)
 		result := s.refreshLiveMarket(runCtx)
 		cancel()
@@ -111,6 +159,29 @@ func (s *Server) RunLiveMarketScheduler(ctx context.Context) {
 			}
 		}
 		state.nextRun = finished.Add(state.interval)
+		status := "ok"
+		if !result.themeFresh || !result.signalFresh || result.partialError != "" {
+			status = "partial"
+		}
+		if result.rateLimited {
+			status = "rate-limited"
+		}
+		s.updateLiveMarketStatus(func(snapshot *liveMarketStatusSnapshot) {
+			snapshot.State = status
+			snapshot.SessionActive = true
+			snapshot.LastCheckAt = timePointer(finished)
+			snapshot.LastRunAt = timePointer(finished)
+			snapshot.NextRunAt = timePointer(state.nextRun)
+			snapshot.IntervalMinutes = int(state.interval / time.Minute)
+			snapshot.IntervalReason = afterReason
+			snapshot.MemoryPercent = sample.memoryPercent
+			snapshot.CPUPercent = sample.cpuPercent
+			snapshot.CPUKnown = sample.cpuKnown
+			snapshot.LastRunStatus = status
+			snapshot.Theme = result.theme
+			snapshot.Signal = result.signal
+			snapshot.LastError = runtimelog.Redact(result.partialError)
+		})
 		s.logLiveSchedulerRun(result, state.interval, afterReason, sample)
 	}
 }
@@ -358,7 +429,7 @@ func (s *Server) logLiveSchedulerRun(result liveMarketRunResult, interval time.D
 		return
 	}
 	status := "ok"
-	if !result.themeFresh || !result.signalFresh {
+	if !result.themeFresh || !result.signalFresh || result.partialError != "" {
 		status = "partial"
 	}
 	if result.rateLimited {
