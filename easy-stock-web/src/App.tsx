@@ -1,3 +1,4 @@
+import { KLineChart } from './components/KLineChart';
 import {
 	Activity,
 	BarChart3,
@@ -671,7 +672,7 @@ export function App() {
 							)}
 						</div>
 						{selectedStock && !visibleStocks.some(stock => stock.symbol === selectedStock.symbol) && <p className="load-notice">当前选择不在本页筛选结果中。</p>}
-						<CandlestickChart lines={kLines} state={klineState} />
+						<KLineChart config={config} lines={kLines} state={klineState} compact />
 						{selectedHistoryFailed && <p className="load-notice">日 K 更新失败 <button type="button" onClick={history.retry}>重试</button></p>}
 						{selectedStock && (selectedHistoryReady
 							? <StockSnapshot stock={selectedStock} />
@@ -831,62 +832,6 @@ function StockSnapshot({ stock }: { stock: ThemeStock }) {
 			<div><span>近5日</span><strong className={toneForValue(stock.metrics.return_5d)}>{formatPercent(stock.metrics.return_5d)}</strong></div>
 			<div><span>20日位置</span><strong>{stock.metrics.position_20d.toFixed(0)}%</strong></div>
 			<div><span>最高连板</span><strong>{stock.metrics.max_limit_streak_20d || '--'}</strong></div>
-		</div>
-	);
-}
-
-function CandlestickChart({ lines, state }: { lines: KLine[]; state: LoadState }) {
-	if (state === 'loading') {
-		return <div className="chart-placeholder"><RefreshCw className="spin" size={20} /><span>加载日 K 数据</span></div>;
-	}
-	if (!lines.length) {
-		return <div className="chart-placeholder"><BarChart3 size={22} /><span>{state === 'error' ? '日 K 数据暂不可用' : '选择个股查看日 K'}</span></div>;
-	}
-	const sorted = [...lines].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
-	const width = 640;
-	const height = 278;
-	const chartTop = 18;
-	const chartBottom = 200;
-	const volumeTop = 220;
-	const volumeBottom = 258;
-	const labelWidth = 52;
-	const plotWidth = width - labelWidth;
-	const minPrice = Math.min(...sorted.map((line) => line.low));
-	const maxPrice = Math.max(...sorted.map((line) => line.high));
-	const priceRange = Math.max(maxPrice - minPrice, 0.01);
-	const maxVolume = Math.max(...sorted.map((line) => line.volume), 1);
-	const step = plotWidth / sorted.length;
-	const bodyWidth = Math.max(2, Math.min(7, step * 0.58));
-	const priceY = (value: number) => chartBottom - ((value - minPrice) / priceRange) * (chartBottom - chartTop);
-	const volumeY = (value: number) => volumeBottom - (value / maxVolume) * (volumeBottom - volumeTop);
-	const priceTicks = Array.from({ length: 5 }, (_, index) => maxPrice - (priceRange * index) / 4);
-	const labelIndexes = [0, Math.floor((sorted.length - 1) / 2), sorted.length - 1];
-
-	return (
-		<div className="candlestick-wrap">
-			<svg className="candlestick" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`最近 ${sorted.length} 个交易日的日 K 线和成交量`}>
-				{priceTicks.map((tick) => {
-					const y = priceY(tick);
-					return <g key={tick}><line className="chart-grid" x1="0" x2={plotWidth} y1={y} y2={y} /><text className="chart-label" x={width - 4} y={y + 4} textAnchor="end">{tick.toFixed(2)}</text></g>;
-				})}
-				{sorted.map((line, index) => {
-					const x = index * step + step / 2;
-					const rising = line.close >= line.open;
-					const top = priceY(Math.max(line.open, line.close));
-					const bottom = priceY(Math.min(line.open, line.close));
-					return (
-						<g className={rising ? 'candle-up' : 'candle-down'} key={`${line.time}-${index}`}>
-							<line x1={x} x2={x} y1={priceY(line.high)} y2={priceY(line.low)} />
-							<rect x={x - bodyWidth / 2} y={top} width={bodyWidth} height={Math.max(bottom - top, 1.5)} />
-							<rect className="volume-bar" x={x - bodyWidth / 2} y={volumeY(line.volume)} width={bodyWidth} height={volumeBottom - volumeY(line.volume)} />
-						</g>
-					);
-				})}
-				{labelIndexes.map((index) => {
-					const line = sorted[index];
-					return <text className="chart-label" x={index * step + step / 2} y={height - 4} textAnchor={index === 0 ? 'start' : index === sorted.length - 1 ? 'end' : 'middle'} key={line.time}>{formatDate(line.time)}</text>;
-				})}
-			</svg>
 		</div>
 	);
 }

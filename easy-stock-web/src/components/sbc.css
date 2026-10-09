@@ -1,0 +1,5 @@
+.sbc-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; padding:7px 10px; font-size:12px; color:var(--text-secondary, #94a3b8); }
+.sbc-toolbar strong { color:var(--text-primary, #e2e8f0); }
+.sbc-toolbar label { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
+.sbc-toolbar input { accent-color:#10b981; }
+.sbc-summary { padding:0 10px 8px; font-size:11px; line-height:1.6; color:var(--text-secondary, #94a3b8); overflow-wrap:anywhere; }

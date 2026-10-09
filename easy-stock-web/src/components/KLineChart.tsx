@@ -1,8 +1,14 @@
+import './sbc.css';
+import { useSBC, type SBCProvider } from '../lib/sbc';
+import { SBCOverlay, defaultSBCLayers } from './SBCOverlay';
+import type { BackendConfig } from '../lib/backend';
 import { KLine } from '../lib/backend';
-import { type MouseEvent, useState } from 'react';
+import { type MouseEvent, useState, useMemo } from 'react';
 
 type Props = {
 	lines: KLine[];
+	config?: BackendConfig | null;
+	sbcProvider?: SBCProvider;
 	symbol?: string;
 	state?: 'loading' | 'ready' | 'error' | 'idle';
 	mode?: 'intraday' | 'daily';
@@ -56,13 +62,18 @@ function intradayLimitPercent(symbol = '') {
 	return 10;
 }
 
-export function KLineChart({ lines, symbol, state = 'ready', mode = 'daily', periodLabel = '日K', compact = false }: Props) {
+function sbcValue(value: unknown, digits = 2) { return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '--'; }
+
+export function KLineChart({ lines, symbol, state = 'ready', mode = 'daily', periodLabel = '日K', compact = false, config, sbcProvider }: Props) {
 	const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+	const [layers, setLayers] = useState(defaultSBCLayers);
+	const sorted = useMemo(() => [...lines].sort((a,b) => Date.parse(a.time)-Date.parse(b.time)), [lines]);
+	const period = ({'日K':'day','周K':'week','月K':'month','5分':'5','15分':'15','30分':'30','60分':'60'} as Record<string,string>)[periodLabel] || 'day';
+	const sbc = useSBC(config, sorted, symbol || sorted[0]?.symbol || '', period, mode === 'daily' && state === 'ready', sbcProvider);
 	const placeholderClass = compact ? 'kline-chart-placeholder compact' : 'kline-chart-placeholder';
 	if (state === 'loading') return <div className={placeholderClass}>正在加载{periodLabel}数据…</div>;
 	if (!lines.length) return <div className={placeholderClass}>{state === 'error' ? `${periodLabel}数据暂不可用，请稍后重试。` : `暂无${periodLabel}数据。`}</div>;
 
-	const sorted = [...lines].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
 	const width = compact ? 640 : 960;
 	const height = compact ? 300 : 430;
 	const left = compact ? 38 : 52;
@@ -72,8 +83,16 @@ export function KLineChart({ lines, symbol, state = 'ready', mode = 'daily', per
 	const volumeTop = compact ? 232 : 338;
 	const volumeBottom = compact ? 266 : 388;
 	const plotWidth = width - left - right;
-	const minPrice = Math.min(...sorted.map((line) => line.low));
-	const maxPrice = Math.max(...sorted.map((line) => line.high));
+	const overlayPrices = sbc.data?.points.flatMap((point, i) => Object.entries(point).filter(([key,value]) => {
+		if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return false;
+		const last = sbc.data!.points.at(-1)!;
+		const start = sorted.length - Math.max(Number(last.ch_tc2)||0, Number(last.ch_bc2)||0);
+		return (layers.ma && /^ma(5|10|20)$/.test(key)) || (layers.channel && (['ch_upper','ch_mid','ch_lower'].includes(key) && i >= start || ['chan_kx','reversal_line'].includes(key)));
+	}).map(([,value]) => Number(value))) || [];
+	const strategyPrices = sbc.data?.strategy.is_matched && layers.signals ? ['entry_price','stop_loss','target_price_1','target_price_2'].map(key => sbc.data!.strategy[key as 'entry_price']).filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0) : [];
+	const scalePrices = [...overlayPrices, ...strategyPrices];
+	const minPrice = Math.min(...sorted.map((line) => line.low), ...scalePrices);
+	const maxPrice = Math.max(...sorted.map((line) => line.high), ...scalePrices);
 	// One-day intraday data is filtered to the latest trading day, so retain
 	// the previous close supplied by the API as the 0% baseline.
 	const suppliedPreviousClose = sorted.find((line) => line.previous_close != null && line.previous_close > 0)?.previous_close;
@@ -83,7 +102,7 @@ export function KLineChart({ lines, symbol, state = 'ready', mode = 'daily', per
 	const percentChange = (value: number) => ((value - referencePrice) / referencePrice) * 100;
 	const percentRange = mode === 'intraday' ? intradayLimitPercent(symbol) : Math.max(
 		5,
-		Math.ceil((Math.max(...sorted.flatMap((line) => [Math.abs(percentChange(line.high)), Math.abs(percentChange(line.low))]), 1) * 1.08) / 5) * 5,
+		Math.ceil((Math.max(...sorted.flatMap((line) => [Math.abs(percentChange(line.high)), Math.abs(percentChange(line.low))]), Math.abs(percentChange(minPrice)), Math.abs(percentChange(maxPrice)), 1) * 1.08) / 5) * 5,
 	);
 	const maxVolume = Math.max(...sorted.map((line) => line.volume), 1);
 	const step = plotWidth / sorted.length;
@@ -147,6 +166,8 @@ export function KLineChart({ lines, symbol, state = 'ready', mode = 'daily', per
 
 	return (
 		<div className={`kline-chart-wrap ${mode === 'intraday' ? 'intraday-chart' : 'daily-chart'}${compact ? ' compact' : ''}`}>
+			{mode === 'daily' && <div className="sbc-toolbar"><strong>SBC</strong>{(Object.keys(layers) as Array<keyof typeof layers>).map(key => <label key={key}><input type="checkbox" checked={layers[key]} onChange={() => setLayers(previous => ({...previous,[key]:!previous[key]}))}/>{{ma:'均线',channel:'通道/支撑/反转',fib:'黄金分割',td:'九转',signals:'策略信号'}[key]}</label>)}</div>}
+			{mode === 'daily' && <div className="sbc-summary" role="status">{sbc.status || (sbc.data && <>通道斜率 {sbcValue(sbc.data.points.at(-1)?.ch_slope_deg, 1)}° · 支撑 {sbcValue(sbc.data.points.at(-1)?.ch_supp_price, 2)} · 反转 {sbcValue(sbc.data.points.at(-1)?.reversal_line, 2)}{sbc.data.activity && <> · 近{sbc.data.activity.days.length}日均振 {sbc.data.activity.avg_amp}% · {sbc.data.activity.rating}</>} · {sbc.data.strategy.is_matched ? `评分 ${sbc.data.strategy.score} · 介入 ${sbc.data.strategy.entry_price} · 止损 ${sbc.data.strategy.stop_loss} · 目标 ${sbc.data.strategy.target_price_1}` : sbc.data.strategy.reason || '未命中策略'}{sbc.data.market_meta?.stale && ' · 陈旧行情'} · 截至 {sbc.data.trade_date}</>)}</div>}
 			<svg className="kline-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${periodLabel}价格、涨跌幅和成交量图`}>
 				{percentTicks.map((tick) => {
 					const y = percentY(tick);
@@ -181,6 +202,7 @@ export function KLineChart({ lines, symbol, state = 'ready', mode = 'daily', per
 					const change = barChangePercent(index);
 					return <g className={rising ? 'kline-up' : 'kline-down'} key={`${line.time}-${index}`}><title>{`${formatLongDate(line.time)} 开 ${line.open.toFixed(2)} 高 ${line.high.toFixed(2)} 低 ${line.low.toFixed(2)} 收 ${line.close.toFixed(2)}（${change >= 0 ? '+' : ''}${change.toFixed(2)}%）成交量 ${formatVolume(line.volume)}`}</title><line className="kline-wick" x1={x} x2={x} y1={priceY(line.high)} y2={priceY(line.low)} /><rect className="kline-body" x={x - bodyWidth / 2} y={bodyTop} width={bodyWidth} height={Math.max(bodyBottom - bodyTop, 1.5)} /><rect className="kline-volume" x={x - bodyWidth / 2} y={barTop} width={bodyWidth} height={volumeBottom - barTop} /></g>;
 				})}
+				{sbc.data && <SBCOverlay data={sbc.data} layers={layers} x={i => left+i*step+step/2} y={priceY} left={left} right={width-right} top={chartTop} bottom={chartBottom}/>}
 				{labelIndexes.map((index) => {
 					const line = sorted[index];
 					const x = left + index * step + step / 2;

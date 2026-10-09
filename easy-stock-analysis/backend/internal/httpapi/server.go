@@ -540,6 +540,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/quotes/realtime", s.realtime)
 	s.mux.HandleFunc("GET /api/v1/quotes/kline", s.kline)
 	s.mux.HandleFunc("GET /api/v1/quotes/kline/batch", s.klineBatch)
+	s.mux.HandleFunc("POST /api/v1/quotes/sbc/v1/analyze", s.sbcAnalysis)
 	s.mux.HandleFunc("GET /api/v1/market-data/stocks", s.marketDataStocks)
 	s.mux.HandleFunc("POST /api/v1/market-data/stocks", s.marketDataStockAdd)
 	s.mux.HandleFunc("GET /api/v1/market-data/stocks/{market}/{symbol}/bars", s.marketDataStockBars)
