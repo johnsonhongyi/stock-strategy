@@ -1,3 +1,4 @@
+import { useThemeMinutes } from './lib/use-theme-minutes';
 import { KLineChart } from './components/KLineChart';
 import {
 	Activity,
@@ -187,16 +188,17 @@ export function App() {
 	const prefetchSymbols = useMemo(() => rankedThemes.filter(item => item.theme !== activeOverview?.theme).slice(0, 2).flatMap(item => item.leader_stocks?.slice(0, 5).map(stock => stock.symbol) || []), [rankedThemes, activeOverview?.theme]);
 	const history = useThemeKLines(config, workspaceMode === 'themes', historySymbols, selectedBase?.symbol || '', prefetchSymbols, themeRefreshKey);
 	const leadershipHistories = history.histories;
+	const minuteHistories = useThemeMinutes(config, workspaceMode === 'themes', historySymbols, selectedBase?.symbol || '', themeRefreshKey);
 	const historyErrorSymbols = history.failed;
 	const historyState = history.historyState;
 	const historyReadyCount = history.ready;
 	const kLines = history.lines;
 	const klineState = history.klineState;
 	const themeStocks = useMemo(() => {
-		if (!sectorMap || !selectedBase || baseThemeStocks.some(stock => stock.symbol === selectedBase.symbol)) return buildThemeStocks(sectorMap, liveQuotes, leadershipHistories);
+		if (!sectorMap || !selectedBase || baseThemeStocks.some(stock => stock.symbol === selectedBase.symbol)) return buildThemeStocks(sectorMap, liveQuotes, leadershipHistories, minuteHistories);
 		const withSelection = { ...sectorMap, groups: [...sectorMap.groups, { id: 'selected', name: '当前选择', nodes: [{ id: 'selected', name: selectedBase.nodes[0] || '当前选择', change_percent: 0, main_net_inflow: 0, match_status: 'matched', stocks: [selectedBase] }] }] };
-		return buildThemeStocks(withSelection, liveQuotes, leadershipHistories);
-	}, [leadershipHistories, liveQuotes, sectorMap, selectedBase, baseThemeStocks]);
+		return buildThemeStocks(withSelection, liveQuotes, leadershipHistories, minuteHistories);
+	}, [leadershipHistories, minuteHistories, liveQuotes, sectorMap, selectedBase, baseThemeStocks]);
 	// The server orders the complete pool. Keep rows stable as individual metrics arrive.
 	const visibleStocks = useMemo(() => {
 		const order = new Map(baseThemeStocks.map((stock, index) => [stock.symbol, index]));
@@ -815,7 +817,7 @@ function LeadershipBreakdown({ stock }: { stock: ThemeStock }) {
 		['启动时序', stock.breakdown.timing],
 		['持续性', stock.breakdown.persistence],
 		['市场关注', stock.breakdown.attention],
-		['影响代理', stock.breakdown.influence_proxy],
+		[stock.metrics.minute_influence ? '分钟滞后相关' : '日线影响代理', stock.breakdown.influence_proxy],
 		['分歧承接', stock.breakdown.resilience],
 		['题材纯度', stock.breakdown.purity],
 	];

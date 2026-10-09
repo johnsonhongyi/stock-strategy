@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +31,7 @@ import (
 	"easy-stock/backend/internal/providers/hotstock"
 	marketoverviewprovider "easy-stock/backend/internal/providers/marketoverview"
 	"easy-stock/backend/internal/providers/sina"
+	"easy-stock/backend/internal/providers/tdx"
 	"easy-stock/backend/internal/providers/tencent"
 	"easy-stock/backend/internal/review"
 	"easy-stock/backend/internal/runtimelog"
@@ -38,6 +41,7 @@ import (
 )
 
 type Server struct {
+	tdx                   *tdx.Client
 	marketNetwork         *marketnetwork.Config
 	ladderThemeAI         *ladderThemeAI
 	mux                   *http.ServeMux
@@ -109,6 +113,7 @@ func NewServer(config any) *Server {
 	if cfg.Realtime == nil {
 		cfg.Realtime = sinaClient
 	}
+	usingDefaultKLine := cfg.KLinePrimary == nil
 	var international KLineProvider
 	if cfg.KLinePrimary == nil {
 		international = &internationalKLineProvider{client: newMarketHTTPClient(20*time.Second, cfg.MarketCacheTransport)}
@@ -207,6 +212,22 @@ func NewServer(config any) *Server {
 			logger:        cfg.Logger,
 		}
 		cfg.KLineFallback = nil
+	}
+	var tdxClient *tdx.Client
+	if cfg.MarketDataDBPath != "" && filepath.IsAbs(cfg.MarketDataDBPath) && os.Getenv("A_STOCK_TDX_ENABLED") != "false" {
+		var hosts []string
+		if raw := strings.TrimSpace(os.Getenv("A_STOCK_TDX_SERVERS")); raw != "" {
+			hosts = strings.Split(raw, ",")
+		}
+		var err error
+		tdxClient, err = tdx.New(filepath.Join(filepath.Dir(cfg.MarketDataDBPath), "tdx-cache.db"), hosts)
+		if err != nil {
+			startupErrors = append(startupErrors, fmt.Errorf("open TDX external cache: %w", err))
+		} else {
+			if usingDefaultKLine {
+				cfg.KLinePrimary = &tdxFirstKLineProvider{tdx: tdxClient, fallback: cfg.KLinePrimary}
+			}
+		}
 	}
 	if cfg.ReviewStore == nil {
 		store, err := review.OpenStore(cfg.ReviewDBPath)
@@ -317,6 +338,7 @@ func NewServer(config any) *Server {
 		token:                 cfg.Token,
 		realtimeProvider:      cfg.Realtime,
 		kLinePrimary:          cfg.KLinePrimary,
+		tdx:                   tdxClient,
 		kLineFallback:         cfg.KLineFallback,
 		newsProvider:          cfg.News,
 		sectorMap:             cfg.SectorMap,
@@ -419,6 +441,9 @@ func (s *Server) Close() error {
 		s.emotionProgress.close()
 	}
 	var closeErrors []error
+	if s.tdx != nil {
+		closeErrors = append(closeErrors, s.tdx.Close())
+	}
 	if s.stockResearch != nil {
 		s.stockResearch.Close()
 	}
@@ -538,6 +563,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/v1/market-data/network", s.marketNetworkSettings)
 	s.mux.HandleFunc("GET /api/v1/sources", s.sources)
 	s.mux.HandleFunc("GET /api/v1/quotes/realtime", s.realtime)
+	s.mux.HandleFunc("GET /api/v1/quotes/tdx/bars", s.tdxBars)
 	s.mux.HandleFunc("GET /api/v1/quotes/kline", s.kline)
 	s.mux.HandleFunc("GET /api/v1/quotes/kline/batch", s.klineBatch)
 	s.mux.HandleFunc("POST /api/v1/quotes/sbc/v1/analyze", s.sbcAnalysis)

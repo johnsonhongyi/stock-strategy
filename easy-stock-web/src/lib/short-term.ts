@@ -1,3 +1,4 @@
+import { minuteInfluence, MinuteInfluence } from './minute-influence';
 import { BoardStock, KLine, Quote, SectorMap, ThemeOverview } from './backend';
 
 export type EmotionTone = 'hot' | 'warm' | 'mixed' | 'cool' | 'cold';
@@ -27,6 +28,10 @@ export type LeadershipState = '待确认' | '启动' | '发酵' | '加速' | '�
 export type ConfirmationLevel = '观察' | '候选' | '强候选' | '已确认';
 
 export type LeadershipMetrics = {
+	minute_influence?: MinuteInfluence;
+	turnover_estimated?: boolean;
+	amount_coverage_5d?: number;
+	turnover_coverage_5d?: number;
 	history_days: number;
 	return_3d: number;
 	return_5d: number;
@@ -163,6 +168,7 @@ export function buildThemeStocks(
 	map: SectorMap | null,
 	liveQuotes: QuoteLookup = {},
 	histories: KLineLookup = {},
+	minutes: KLineLookup = {},
 ): ThemeStock[] {
 	const baseStocks = flattenThemeStocks(map, liveQuotes);
 	if (!baseStocks.length) {
@@ -185,6 +191,8 @@ export function buildThemeStocks(
 		const history = historyBySymbol.get(stock.symbol) || [];
 		const dailyReturns = dailyReturnsBySymbol.get(stock.symbol) || [];
 		const metrics = calculateLeadershipMetrics(stock, history, dailyReturns, themeDailyReturns, tradingDates, themeStartDate);
+		metrics.minute_influence = minuteInfluence(stock.symbol, minutes, baseStocks.filter(peer => peer.nodes.some(node => stock.nodes.includes(node))).map(peer => peer.symbol), history.at(-1)?.time.slice(0,10));
+		metrics.turnover_estimated = history.slice(-5).some(line => line.turnover_estimated && (line.turnover_rate || 0) > 0);
 		const latest = history.at(-1);
 		const latestRangePercent = latest?.close ? ((latest.high - latest.low) / latest.close) * 100 : 0;
 		const lockedLimit = Boolean(
@@ -270,6 +278,8 @@ function calculateLeadershipMetrics(
 		.map((item) => item.value - (themeDailyReturns.get(item.date) || 0));
 
 	return {
+		amount_coverage_5d: recent5.length ? recent5.filter(line=>Number.isFinite(line.amount)&&line.amount>0).length/recent5.length : 0,
+		turnover_coverage_5d: recent5.length ? recent5.filter(line=>Number.isFinite(line.turnover_rate)&&(line.turnover_rate||0)>0).length/recent5.length : 0,
 		history_days: history.length,
 		return_3d: cumulativeReturn(history, 3),
 		return_5d: return5,
@@ -326,13 +336,13 @@ function scoreLeadership(
 		[clamp(50 + metrics.return_3d * 3, 0, 100), 0.25],
 	]);
 	const amountValue = metrics.avg_amount_5d || stock.amount || 0;
-	const hasAmount = amountValue > 0;
-	const hasTurnover = metrics.avg_turnover_5d > 0;
+	const hasAmount = amountValue > 0 && (metrics.amount_coverage_5d || 0) >= 0.8;
+	const hasTurnover = metrics.avg_turnover_5d > 0 && (metrics.turnover_coverage_5d || 0) >= 0.8;
 	const attention = weightedAverage([
 		[hasAmount ? percentileScore(peers.amount, amountValue) : 28, 0.7],
 		[hasTurnover ? percentileScore(peers.turnover, metrics.avg_turnover_5d) : 35, 0.3],
 	]);
-	const influenceProxy = weightedAverage([
+	const influenceProxy = metrics.minute_influence?.score ?? weightedAverage([
 		[percentileScore(peers.relative5, metrics.relative_strength_5d), 0.45],
 		[percentileScore(peers.occurrence, stock.occurrence), 0.35],
 		[percentileScore(peers.return3, metrics.return_3d), 0.2],
@@ -371,7 +381,7 @@ function scoreLeadership(
 	tradabilityScore = Math.round(clamp(tradabilityScore, 0, 100));
 
 	const hasExactLimitData = Boolean(stock.limit_up_streak || stock.last_limit_date);
-	const confidence = calculateConfidence(stock, metrics, hasAmount, hasTurnover, hasExactLimitData);
+	const confidence = calculateConfidence(stock, metrics, hasAmount, hasTurnover && !metrics.turnover_estimated, hasExactLimitData);
 	const confirmation = confirmationLevel(leaderScore, confidence);
 	const state = leadershipState(stock, metrics);
 	const role = isStockRole(stock.rank_role)
@@ -490,6 +500,7 @@ function confirmationLevel(score: number, confidence: number): ConfirmationLevel
 
 function buildEvidence(stock: BaseThemeStock, metrics: LeadershipMetrics, breakdown: LeadershipBreakdown): string[] {
 	const evidence: string[] = [];
+	if (metrics.minute_influence) { const m = metrics.minute_influence; evidence.push(`${m.tradeDate} 分钟滞后相关：${m.peers}只同题材样本、至少${m.samples}组，覆盖${Math.round(m.coverage * 100)}%，平均滞后${m.lag}分钟`); }
 	if (stock.limit_up_streak) {
 		evidence.push(`${limitRegimeForStock(stock)}涨停池确认：最高${stock.limit_up_streak}连板，近${stock.limit_up_days || stock.limit_up_count || stock.limit_up_streak}日${stock.limit_up_count || stock.limit_up_streak}板`);
 	}
@@ -514,10 +525,11 @@ function buildRisks(
 	confidence: number,
 	hasExactLimitData: boolean,
 ): string[] {
-	const risks = ['尚未接入分钟级领涨—跟随关系，板块带动力使用日线代理'];
+	const risks = [item.metrics.minute_influence ? '分钟领涨—跟随为当前样本的滞后相关性，不代表因果带动力' : '分钟级同题材有效样本不足，板块带动力仍使用日线代理'];
 	if (item.metrics.limit_up_days_20d > 0 && !hasExactLimitData) risks.push('连板高度由日K涨幅近似识别，待涨停事件流校准');
 	if (item.metrics.history_days < 15) risks.push('历史样本不足15个交易日');
 	if (!hasAmount || !hasTurnover) risks.push('成交额或换手率数据不完整，可交易性置信度受限');
+	else if (item.metrics.turnover_estimated) risks.push('换手率按当前流通股本估算，历史股本变化未复权，置信度保留折扣');
 	if (item.lockedLimit) risks.push('最新涨停接近无换手状态，市场地位与可交易性需分开');
 	if (item.metrics.position_20d >= 92) risks.push('价格处于20日区间高位，分歧风险上升');
 	if (confidence < 0.5) risks.push('当前只能作为观察标签，不能确认龙头身份');

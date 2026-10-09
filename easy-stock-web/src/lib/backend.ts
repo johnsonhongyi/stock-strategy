@@ -280,6 +280,7 @@ export type Quote = {
 };
 
 export type KLine = {
+  turnover_estimated?: boolean;
   vwap?: number;
   vwap_estimated?: boolean;
   symbol: string;

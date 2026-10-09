@@ -11,6 +11,10 @@ import (
 // Compute before viewport slicing, in chronological order. Unknown amount or
 // volume units use an explicitly marked close/volume weighted estimate.
 func intradayVWAP(input []foundation.KLine) []foundation.KLine {
+	return intradayVWAPWindow(input, false)
+}
+
+func intradayVWAPWindow(input []foundation.KLine, continuous bool) []foundation.KLine {
 	lines := append([]foundation.KLine(nil), input...)
 	sort.SliceStable(lines, func(i, j int) bool { return lines[i].Time.Before(lines[j].Time) })
 	var amount, volume float64
@@ -20,7 +24,7 @@ func intradayVWAP(input []foundation.KLine) []foundation.KLine {
 	for i := range lines {
 		line := &lines[i]
 		day := line.Time.In(zone).Format("2006-01-02")
-		if day != date {
+		if date == "" || (!continuous && day != date) {
 			date = day
 			amount = 0
 			volume = 0
@@ -33,7 +37,7 @@ func intradayVWAP(input []foundation.KLine) []foundation.KLine {
 		}
 		units := 1.0
 		source := strings.ToLower(line.Meta.Source)
-		known := strings.HasPrefix(source, "sina") || strings.HasPrefix(source, "eastmoney")
+		known := strings.HasPrefix(source, "tdx") || strings.HasPrefix(source, "sina") || strings.HasPrefix(source, "eastmoney")
 		if strings.HasPrefix(source, "eastmoney") {
 			units = 100
 		}

@@ -31,20 +31,21 @@ type Quote struct {
 }
 
 type KLine struct {
-	VWAP          float64    `json:"vwap,omitempty"`
-	VWAPEstimated bool       `json:"vwap_estimated,omitempty"`
-	Symbol        string     `json:"symbol"`
-	Time          time.Time  `json:"time"`
-	Open          float64    `json:"open"`
-	High          float64    `json:"high"`
-	Low           float64    `json:"low"`
-	Close         float64    `json:"close"`
-	PreviousClose float64    `json:"previous_close,omitempty"`
-	Volume        float64    `json:"volume"`
-	Amount        float64    `json:"amount"`
-	TurnoverRate  float64    `json:"turnover_rate,omitempty"`
-	ChangePercent float64    `json:"change_percent,omitempty"`
-	Meta          SourceMeta `json:"meta"`
+	TurnoverEstimated bool       `json:"turnover_estimated,omitempty"`
+	VWAP              float64    `json:"vwap,omitempty"`
+	VWAPEstimated     bool       `json:"vwap_estimated,omitempty"`
+	Symbol            string     `json:"symbol"`
+	Time              time.Time  `json:"time"`
+	Open              float64    `json:"open"`
+	High              float64    `json:"high"`
+	Low               float64    `json:"low"`
+	Close             float64    `json:"close"`
+	PreviousClose     float64    `json:"previous_close,omitempty"`
+	Volume            float64    `json:"volume"`
+	Amount            float64    `json:"amount"`
+	TurnoverRate      float64    `json:"turnover_rate,omitempty"`
+	ChangePercent     float64    `json:"change_percent,omitempty"`
+	Meta              SourceMeta `json:"meta"`
 }
 
 type NewsItem struct {

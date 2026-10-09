@@ -7,7 +7,7 @@ import { SBCRecoveryGate, recoverSBCBars } from '../lib/sbc-recovery';
 import { readChartWindowSize, saveChartWindowSize } from '../lib/chart-window';
 
 const periods = [
-  ['分时','1','intraday'], ['5分','5','daily'], ['15分','15','daily'], ['30分','30','daily'], ['60分','60','daily'],
+  ['分时','1','intraday'], ['3日分时','1','intraday'], ['5日分时','1','intraday'], ['5分','5','daily'], ['15分','15','daily'], ['30分','30','daily'], ['60分','60','daily'],
   ['日K','day','daily'], ['2D','2d','daily'], ['3D','3d','daily'], ['周K','week','daily'], ['月K','month','daily'],
 ] as const;
 
@@ -36,12 +36,16 @@ export function KLineExplorer(props: KLineChartProps & {render: (props: KLineCha
   useEffect(()=>{
     if(!needsFetch || !props.config || !active)return;
     const abort = new AbortController();
-    const request=recovering===recoveryKey
+    const multiDays=label==='3日分时'?3:label==='5日分时'?5:0;
+    const request=multiDays
+      ? requestJSON<{data:KLine[]}>(props.config,`/api/v1/quotes/tdx/bars?symbol=${encodeURIComponent(symbol)}&period=1&limit=${multiDays*240+80}&days=${multiDays}`,{signal:abort.signal})
+      : recovering===recoveryKey
       ? recoverSBCBars(props.config,symbol,props.market,active[1],abort.signal)
       : requestJSON<{data:KLine[]}>(props.config,`/api/v1/quotes/kline?symbol=${encodeURIComponent(symbol)}&period=${active[1]}&limit=240${props.market?`&market=${encodeURIComponent(props.market)}`:''}`,{signal:abort.signal});
     request.then(result=>{
       if(abort.signal.aborted)return;
-      const lines=active[1]==='1'?latestTradingDayKLines(result.data || []):result.data || [];
+      const dates=[...new Set((result.data||[]).map(line=>line.time.slice(0,10)))].sort().slice(-multiDays);
+      const lines=multiDays?(result.data||[]).filter(line=>dates.includes(line.time.slice(0,10))):active[1]==='1'?latestTradingDayKLines(result.data || []):result.data || [];
       if(recovering===recoveryKey && active[1]==='day')props.onRecovered?.(lines);
       setLoaded({key,lines,state:lines.length?'ready':'error',error:lines.length?undefined:'数据源未返回该周期行情，请重试或切换周期'});
     },error=>{if(!abort.signal.aborted)setLoaded({key,lines:[],state:'error',error:error instanceof Error?error.message:'行情加载失败'});});
