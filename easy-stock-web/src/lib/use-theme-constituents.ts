@@ -13,6 +13,10 @@ export function leaderPreview(theme: ThemeOverview, filter: ThemeFilter): ThemeS
 	return { map, order: theme.leader_stocks.map(stock => stock.symbol), complete: false, coverage: 'leaders', source_snapshot_id: theme.snapshot_id, snapshot_id: theme.snapshot_id || '', sort: filter.sort, pagination: { page: 1, page_size: 20, total: theme.leader_stocks.length, total_pages: 0, has_more: false } };
 }
 
+export function preserveLeaderPreview(incoming: ThemeScreenData, previous: ThemeScreenData | null) {
+    const hasStocks = incoming.map.groups?.some(group => group.nodes.some(node => node.stocks.length));
+    return !hasStocks && previous?.coverage === 'leaders' && !previous.complete;
+}
 export function useThemeConstituents(config: BackendConfig | null, active: boolean, theme: ThemeOverview | null, filter: ThemeFilter, refreshKey: number, recover: () => Promise<ThemeOverview[]>) {
 	const requestKey = JSON.stringify([config?.backendUrl, theme?.theme, theme?.snapshot_id, filter]);
 	const [state, setState] = useState<{ key: string; data: ThemeScreenData | null; fetching: boolean; error: string }>({ key: '', data: null, fetching: false, error: '' });
@@ -39,7 +43,12 @@ export function useThemeConstituents(config: BackendConfig | null, active: boole
 					const result = await requestJSON<{ data: ThemeScreenData }>(config, `/api/v1/themes/screen?${query}`, { signal: abort.signal });
 					if (abort.signal.aborted || expired || (leaders && (complete || data?.complete))) return;
 					if (leaders && !result.data.map.groups?.some(group => group.nodes.some(node => node.stocks.length))) return;
-					data = { ...result.data, complete: result.data.complete ?? !leaders }; complete = !leaders;
+					const incoming = result.data;
+					if (!leaders && preserveLeaderPreview(incoming, data)) {
+						fullError = '完整成分暂不可用，保留已知领涨预览';
+						return;
+					}
+					data = { ...incoming, complete: incoming.complete ?? !leaders }; complete = !leaders;
 					cache.current.set(requestKey, data);
 					if (cache.current.size > 32) cache.current.delete(cache.current.keys().next().value!);
 					setState({ key: requestKey, data, fetching: !complete, error: '' });

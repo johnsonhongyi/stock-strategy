@@ -767,6 +767,17 @@ func (s *Server) klineBatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) loadKLine(ctx context.Context, symbol string, period string, limit int) ([]foundation.KLine, error) {
+	if period == "2d" || period == "3d" {
+		days := 2
+		if period == "3d" {
+			days = 3
+		}
+		lines, err := s.loadKLine(ctx, symbol, "day", limit*days)
+		if err != nil {
+			return nil, err
+		}
+		return lastKLines(aggregateTradingDays(lines, days), limit), nil
+	}
 	lines, err := s.kLinePrimary.KLine(ctx, symbol, period, limit)
 	if err == nil {
 		return normalizeKLinePeriod(lines, period), nil

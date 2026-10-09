@@ -2,13 +2,14 @@ import type { SBCAnalysis } from '../lib/sbc';
 
 export type SBCLayers = { ma: boolean; channel: boolean; fib: boolean; td: boolean; signals: boolean };
 export const defaultSBCLayers: SBCLayers = {ma: true, channel: true, fib: false, td: true, signals: true};
-const colors: Record<string, string> = {ma5:'#ffd700', ma10:'#00c9d9', ma20:'#e84afa', ch_upper:'#f5f5f5', ch_mid:'#9ca3af', ch_lower:'#f5f5f5', chan_kx:'#00ff88', reversal_line:'#fb923c'};
+const colors: Record<string, string> = {ma5:'#ffd700', ma10:'#00c9d9', ma20:'#e84afa', ch_upper:'var(--text, #334155)', ch_mid:'#9ca3af', ch_lower:'var(--text, #334155)', chan_kx:'#00ff88', reversal_line:'#fb923c'};
 
 export function SBCOverlay({data, layers, x, y, left, right, top, bottom}: {
   data: SBCAnalysis; layers: SBCLayers; x: (index: number) => number; y: (price: number) => number;
   left: number; right: number; top: number; bottom: number;
 }) {
   const points = data.points;
+  if (!points.length) return null;
   const last = points.at(-1)!;
   const start = Math.max(0, points.length - Math.max(Number(last.ch_tc2) || 0, Number(last.ch_bc2) || 0));
   const path = (field: string, from = 0) => {
@@ -20,6 +21,7 @@ export function SBCOverlay({data, layers, x, y, left, right, top, bottom}: {
       return command + x(i) + ' ' + y(value);
     }).join(' ');
   };
+  let lastSignalX = left - 60;
   const strategy = data.strategy;
   return <g pointerEvents="none" fontSize="10">
     {Object.entries(colors).filter(([field]) => field.startsWith('ma') ? layers.ma : layers.channel).map(([field, color]) =>
@@ -37,7 +39,8 @@ export function SBCOverlay({data, layers, x, y, left, right, top, bottom}: {
     })}
     {layers.signals && points.map((point,i) => {
       const labels = ['sig_launch','sig_start','sig_escape','sig_top','sig_bottom'].filter(field => Number(point[field]) === 1);
-      if (!labels.length) return null;
+      if (!labels.length || x(i)-lastSignalX < 52) return null;
+      lastSignalX=x(i);
       const label: Record<string,string> = {sig_launch:'启动',sig_start:'起涨',sig_escape:'逃顶',sig_top:'顶部',sig_bottom:'底部'};
       const price = Number(point.close);
       return <text key={point.time} x={x(i)} y={Math.max(top+10,Math.min(bottom-3,y(price)-16))} fill="#ffcc00"><title>{labels.map(field=>label[field]).join(' / ')}</title>{label[labels[0]]}</text>;

@@ -26,7 +26,7 @@ type Request struct {
 
 func Validate(input Request) error {
 	switch input.Period {
-	case "day", "week", "month", "5", "15", "30", "60":
+	case "day", "2d", "3d", "week", "month", "5", "15", "30", "60":
 	default:
 		return fmt.Errorf("%w: unsupported period", ErrInvalidInput)
 	}
@@ -39,11 +39,20 @@ func Validate(input Request) error {
 				return fmt.Errorf("%w: non-finite bar %d", ErrInvalidInput, i)
 			}
 		}
-		if b.Open <= 0 || b.Close <= 0 || b.Low <= 0 || b.High < b.Open || b.High < b.Close || b.High < b.Low || b.Low > b.Open || b.Low > b.Close || b.Volume < 0 || b.Time.IsZero() || (i > 0 && !b.Time.After(input.Bars[i-1].Time)) || (b.Symbol != "" && b.Symbol != input.Symbol) {
+		if b.Open <= 0 || b.Close <= 0 || b.Low <= 0 || b.High < b.Open || b.High < b.Close || b.High < b.Low || b.Low > b.Open || b.Low > b.Close || b.Volume < 0 || b.Time.IsZero() || (i > 0 && !b.Time.After(input.Bars[i-1].Time)) || (b.Symbol != "" && !sameSymbol(b.Symbol, input.Symbol)) {
 			return fmt.Errorf("%w: invalid OHLC, volume, timestamp or symbol at bar %d", ErrInvalidInput, i)
 		}
 	}
 	return nil
+}
+
+func sameSymbol(a, b string) bool {
+	if strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b)) {
+		return true
+	}
+	left, leftErr := foundation.NormalizeSymbol(a)
+	right, rightErr := foundation.NormalizeSymbol(b)
+	return leftErr == nil && rightErr == nil && left.Canonical == right.Canonical
 }
 
 // Analyze preserves the v1 JSON contract for existing HTTP/custom providers.

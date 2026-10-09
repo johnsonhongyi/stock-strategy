@@ -112,6 +112,8 @@ export function App() {
 	const [activeTheme, setActiveTheme] = useState('');
 	const [selectedNode, setSelectedNode] = useState('all');
 	const [selectedSymbol, setSelectedSymbol] = useState('');
+	const themeTable = useRef<HTMLDivElement>(null);
+	useEffect(()=>{const wrap=themeTable.current;const row=wrap?.querySelector('tr.selected');if(!wrap||!row)return;const parent=wrap.getBoundingClientRect(),child=row.getBoundingClientRect();if(child.bottom>parent.bottom)wrap.scrollTop+=child.bottom-parent.bottom;else if(child.top<parent.top+36)wrap.scrollTop+=child.top-parent.top-36;},[selectedSymbol]);
 	const [liveQuotes, setLiveQuotes] = useState<QuoteLookup>({});
 	const [sources, setSources] = useState<SourceHealth[]>([]);
 	const [news, setNews] = useState<NewsItem[]>([]);
@@ -610,7 +612,7 @@ export function App() {
 								<input value={stockQuery} onChange={(event) => setStockQuery(event.target.value)} placeholder="搜索完整候选池中的代码、名称或细分" />
 							</label>
 						</div>
-						<div className="stock-table-wrap">
+						<div ref={themeTable} className="stock-table-wrap" tabIndex={0} aria-label="主线个股列表，支持上下键切股" onKeyDown={event=>{if(event.key!=='ArrowUp'&&event.key!=='ArrowDown')return;event.preventDefault();const index=visibleStocks.findIndex(stock=>stock.symbol===selectedStock?.symbol);const next=visibleStocks[index+(event.key==='ArrowUp'?-1:1)];if(next)setSelectedSymbol(next.symbol);}}>
 							<table className="stock-table">
 								<thead>
 									<tr>
@@ -672,7 +674,7 @@ export function App() {
 							)}
 						</div>
 						{selectedStock && !visibleStocks.some(stock => stock.symbol === selectedStock.symbol) && <p className="load-notice">当前选择不在本页筛选结果中。</p>}
-						<KLineChart config={config} lines={kLines} state={klineState} compact />
+						<KLineChart config={config} lines={kLines} symbol={selectedStock?.symbol} title={selectedStock?.name} state={klineState} onNavigate={direction=>{const index=visibleStocks.findIndex(stock=>stock.symbol===selectedStock?.symbol);const next=visibleStocks[index+direction];if(next)setSelectedSymbol(next.symbol);}} compact />
 						{selectedHistoryFailed && <p className="load-notice">日 K 更新失败 <button type="button" onClick={history.retry}>重试</button></p>}
 						{selectedStock && (selectedHistoryReady
 							? <StockSnapshot stock={selectedStock} />

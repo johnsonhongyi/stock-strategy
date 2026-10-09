@@ -287,7 +287,7 @@ export function LimitUpWorkspace({ config, data, state, error, emotionData, emot
 				<ShieldAlert size={14} />
 				<span>当日及本地已留存交易日的涨停结构、连续板数和逐股炒作题材优先采用开盘啦，5 分钟内复用快照；东方财富只补充尚无开盘啦快照的历史交易日、缺失股票和行情字段。主炒题材仍会剔除本股后检验同题材梯队，并对宽泛标签降权。</span>
 			</footer>
-			{selectedStock && <KLineModal config={config} stock={selectedStock} lines={selectedKLines} state={selectedKLineState} error={selectedKLineError} periodKey={selectedKLinePeriod} onPeriodChange={setSelectedKLinePeriod} onClose={() => setSelectedStock(null)} />}
+			{selectedStock && <KLineModal onNavigate={direction=>{const stocks=[...current.levels,...previous.levels].flatMap(level=>level.stocks);const index=stocks.findIndex(stock=>stock.symbol===selectedStock.symbol);const next=stocks[index+direction];if(next)setSelectedStock(next);}} config={config} stock={selectedStock} lines={selectedKLines} state={selectedKLineState} error={selectedKLineError} periodKey={selectedKLinePeriod} onPeriodChange={setSelectedKLinePeriod} onClose={() => setSelectedStock(null)} />}
 			{selectedBillboard && <BillboardModal stock={selectedBillboard.stock} tradeDate={selectedBillboard.tradeDate} item={billboardItem} detail={billboardDetail} state={billboardState} error={billboardError} onClose={() => setSelectedBillboard(null)} />}
 		</section>
 	);
@@ -587,7 +587,7 @@ function BillboardSeatPanel({ title, prefix, seats }: { title: string; prefix: '
 	return <section className={`billboard-seat-panel ${prefix === '买' ? 'buy' : 'sell'}`}><header><strong>{title}</strong><span>{prefix === '买' ? '按买入额排名' : '按卖出额排名'}</span></header><div className="billboard-seat-head"><span>排名 / 席位</span><span>买入</span><span>卖出</span><span>净额</span></div>{Array.from({ length: 5 }, (_, index) => { const rank = index + 1; const seat = seatByRank.get(rank); const label = seat ? classifyBillboardSeat(seat) : null; return <article key={rank}><span className="billboard-seat-name"><i>{prefix}{rank}</i><span><strong title={seat?.name || '数据源未提供'}>{seat?.name || '数据源未提供'}</strong>{label && <small className={`billboard-seat-label ${label.kind}`} title={label.note}>{label.label}</small>}</span></span><span>{seat ? formatMoney(seat.buy_amount) : '--'}</span><span>{seat ? formatMoney(seat.sell_amount) : '--'}</span><strong className={seat ? (seat.net_amount >= 0 ? 'up' : 'down') : ''}>{seat ? formatMoney(seat.net_amount) : '--'}</strong></article>; })}</section>;
 }
 
-function KLineModal({ config, stock, lines, state, error, periodKey, onPeriodChange, onClose }: { config: BackendConfig | null; stock: LimitUpLadderStock; lines: KLine[]; state: LoadState; error: string; periodKey: KLinePeriodKey; onPeriodChange: (period: KLinePeriodKey) => void; onClose: () => void }) {
+function KLineModal({ config, onNavigate, stock, lines, state, error, periodKey, onPeriodChange, onClose }: { config: BackendConfig | null; onNavigate: (direction:number)=>void; stock: LimitUpLadderStock; lines: KLine[]; state: LoadState; error: string; periodKey: KLinePeriodKey; onPeriodChange: (period: KLinePeriodKey) => void; onClose: () => void }) {
 	useEffect(() => {
 		const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
 		window.addEventListener('keydown', onKeyDown);
@@ -618,7 +618,7 @@ function KLineModal({ config, stock, lines, state, error, periodKey, onPeriodCha
 				</div>
 				<div className="kline-period-summary"><span>{periodRangeLabel}</span><span>前复权行情</span></div>
 				{state === 'error' && <div className="kline-modal-error"><ShieldAlert size={17} /><span>{error || `${activePeriod.label}数据加载失败`}</span></div>}
-				<KLineChart config={config} lines={lines} symbol={stock.symbol} state={state} mode={activePeriod.mode} periodLabel={activePeriod.label} />
+				<KLineChart config={config} title={stock.name} onNavigate={onNavigate} lines={lines} symbol={stock.symbol} state={state} mode={activePeriod.mode} periodLabel={activePeriod.label} />
 				<footer className="kline-modal-footer">鼠标悬浮图表可查看行情细节；数据源：东方财富 / 新浪，结果仅供研究参考。</footer>
 			</section>
 		</div>

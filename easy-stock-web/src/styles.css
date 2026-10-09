@@ -7446,3 +7446,14 @@ a:focus-visible {
 .limit-stock-concept-toggle { padding: 3px 6px; border: 0; border-radius: 4px; background: transparent; color: var(--theme-blue, #175ea9); font-size: 11px; line-height: 1.4; cursor: pointer; }
 .limit-stock-concept-toggle:hover { background: var(--theme-blue-soft, rgba(23, 94, 169, .07)); }
 .limit-stock-concept-toggle:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* Keep the selection list and its chart visible together on wide screens. */
+@media (min-width:1121px) {
+  .theme-workspace .stock-table-wrap {min-height:280px;max-height:clamp(340px,60vh,780px);overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;}
+  .theme-workspace .stock-table thead th {position:sticky;top:0;z-index:2;background:var(--theme-surface,#fff);}
+  .trading-layout>.stock-detail {position:sticky;top:12px;align-self:start;max-height:calc(100vh - 24px);overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;display:flex;flex-direction:column;}
+  .trading-layout>.stock-detail>.detail-panel {flex-shrink:0;}
+}
+@media (max-width:1120px) {
+  .theme-workspace .stock-table-wrap {max-height:55vh;overflow:auto;}
+  .theme-workspace .stock-table thead th {position:sticky;top:0;z-index:2;background:var(--theme-surface,#fff);}
+}
