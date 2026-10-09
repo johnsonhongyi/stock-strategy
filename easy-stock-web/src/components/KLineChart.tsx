@@ -6,8 +6,10 @@ import { KLine } from '../lib/backend';
 import { type MouseEvent, useState, useMemo, useEffect, useRef } from 'react';
 import { KLineExplorer } from './KLineExplorer';
 import { KLineDetails } from './KLineDetails';
+import { SBCIntradayOverlay } from './SBCIntradayOverlay';
 
 export type KLineChartProps = {
+	referenceLines?: KLine[];
 	onNavigate?: (direction: number) => void;
 	title?: string;
 	lines: KLine[];
@@ -73,7 +75,7 @@ function sbcValue(value: unknown, digits = 2) { return typeof value === 'number'
 
 export function KLineChart(props: KLineChartProps) { return <KLineExplorer {...props} render={next => <KLineCanvas {...next} />} />; }
 
-function KLineCanvas({ lines, symbol, state = 'ready', mode = 'daily', periodLabel = '日K', compact = false, config, sbcProvider, onInvalidData }: KLineChartProps) {
+function KLineCanvas({ referenceLines, lines, symbol, state = 'ready', mode = 'daily', periodLabel = '日K', compact = false, config, sbcProvider, onInvalidData }: KLineChartProps) {
 	const [selectedIndex, setHoveredIndex] = useState<number | null>(null);
 	const [layers, setLayers] = useState(defaultSBCLayers);
 	const all = useMemo(() => [...lines].sort((a,b) => Date.parse(a.time)-Date.parse(b.time)), [lines]);
@@ -94,8 +96,8 @@ function KLineCanvas({ lines, symbol, state = 'ready', mode = 'daily', periodLab
         return () => element.removeEventListener('wheel', wheel);
     }, [all.length, state]);
 	const period = ({'日K':'day','2D':'2d','3D':'3d','周K':'week','月K':'month','5分':'5','15分':'15','30分':'30','60分':'60'} as Record<string,string>)[periodLabel] || 'day';
-	const sbc = useSBC(config, all, symbol || all[0]?.symbol || '', period, mode === 'daily' && state === 'ready', sbcProvider);
-    useEffect(()=>{if (/invalid SBC input.*(OHLC|non-finite|timestamp|symbol)/i.test(sbc.status)) onInvalidData?.();},[sbc.status,onInvalidData]);
+	const sbc = useSBC(config, mode === 'intraday' ? referenceLines || [] : all, symbol || all[0]?.symbol || '', mode === 'intraday' ? 'day' : period, state === 'ready', sbcProvider);
+    useEffect(()=>{if (mode === 'daily' && /invalid SBC input.*(OHLC|non-finite|timestamp|symbol)/i.test(sbc.status)) onInvalidData?.();},[sbc.status,onInvalidData]);
 	const placeholderClass = compact ? 'kline-chart-placeholder compact' : 'kline-chart-placeholder';
 	if (state === 'loading') return <div className={placeholderClass}>正在加载{periodLabel}数据…</div>;
 	if (!lines.length && state === 'idle' && !symbol) return <div className={placeholderClass}>请选择股票查看行情</div>;
@@ -104,7 +106,7 @@ function KLineCanvas({ lines, symbol, state = 'ready', mode = 'daily', periodLab
 	const width = compact ? 640 : 960;
 	const height = compact ? 300 : 430;
 	const left = compact ? 38 : 52;
-	const right = compact ? 58 : 72;
+	const right = mode === 'intraday' ? (compact ? 120 : 150) : compact ? 58 : 72;
 	const chartTop = compact ? 14 : 20;
 	const chartBottom = compact ? 210 : 316;
 	const volumeTop = compact ? 232 : 338;
@@ -112,26 +114,24 @@ function KLineCanvas({ lines, symbol, state = 'ready', mode = 'daily', periodLab
 	const plotWidth = width - left - right;
     // Only visible candles control the automatic axis; projected channel/targets
     // are clipped rather than compressing the price action.
-    const minPrice = Math.min(...sorted.map(line => line.low));
-    const maxPrice = Math.max(...sorted.map(line => line.high));
+    const intradayRefs = mode === 'intraday' ? [all[0]?.previous_close || all[0]?.open, ...sorted.map(line=>line.vwap || line.close), ...['ch_upper','reversal_line','ch_supp_price'].map(field=>Number(sbc.data?.points.at(-1)?.[field])).filter(value=>value>0 && Math.abs(value/all[0].close-1)<.15)].filter((value):value is number=>Boolean(value && Number.isFinite(value))) : [];
+    const minPrice = Math.min(...sorted.map(line => line.low), ...intradayRefs);
+    const maxPrice = Math.max(...sorted.map(line => line.high), ...intradayRefs);
     const visibleSBC = sbc.data ? {...sbc.data, points:sbc.data.points.slice(startIndex,end), strategy:{...sbc.data.strategy, pioneer_sig_indices:sbc.data.strategy.pioneer_sig_indices?.map(i=>i-startIndex).filter(i=>i>=0&&i<sorted.length)}} : undefined;
 	// One-day intraday data is filtered to the latest trading day, so retain
 	// the previous close supplied by the API as the 0% baseline.
-	const suppliedPreviousClose = sorted.find((line) => line.previous_close != null && line.previous_close > 0)?.previous_close;
+	const suppliedPreviousClose = all.find((line) => line.previous_close != null && line.previous_close > 0)?.previous_close;
 	const referencePrice = mode === 'intraday' && suppliedPreviousClose && suppliedPreviousClose > 0
 		? suppliedPreviousClose
-		: sorted[0].close > 0 ? sorted[0].close : Math.max(minPrice, 0.01);
+		: mode === 'intraday' ? all[0].open : sorted[0].close > 0 ? sorted[0].close : Math.max(minPrice, 0.01);
 	const percentChange = (value: number) => ((value - referencePrice) / referencePrice) * 100;
-	const percentRange = mode === 'intraday' ? intradayLimitPercent(symbol) : Math.max(
-		5,
-		Math.ceil((Math.max(...sorted.flatMap((line) => [Math.abs(percentChange(line.high)), Math.abs(percentChange(line.low))]), Math.abs(percentChange(minPrice)), Math.abs(percentChange(maxPrice)), 1) * 1.08) / 5) * 5,
-	);
+	const percentRange = intradayLimitPercent(symbol);
 	const maxVolume = Math.max(...sorted.map((line) => line.volume), 1);
 	const step = plotWidth / sorted.length;
 	const bodyWidth = Math.max(2, Math.min(10, step * 0.62));
 	const padding = Math.max((maxPrice-minPrice)*.08, maxPrice*.005);
-    const lowPercent = mode === 'intraday' ? -percentRange : ((Math.max(.001,minPrice-padding)-referencePrice)/referencePrice)*100;
-    const highPercent = mode === 'intraday' ? percentRange : ((maxPrice+padding-referencePrice)/referencePrice)*100;
+    const lowPercent = ((Math.max(.001,minPrice-padding)-referencePrice)/referencePrice)*100;
+    const highPercent = ((maxPrice+padding-referencePrice)/referencePrice)*100;
     const percentY = (value: number) => {
 		const bounded = value;
 		return chartTop + ((highPercent - bounded) / (highPercent-lowPercent)) * (chartBottom - chartTop);
@@ -192,8 +192,8 @@ function KLineCanvas({ lines, symbol, state = 'ready', mode = 'daily', periodLab
 
 	return (
 		<div className={`kline-chart-wrap ${mode === 'intraday' ? 'intraday-chart' : 'daily-chart'}${compact ? ' compact' : ''}`}>
-			{mode === 'daily' && <div className="sbc-toolbar"><strong>SBC</strong>{(Object.keys(layers) as Array<keyof typeof layers>).map(key => <label key={key}><input type="checkbox" checked={layers[key]} onChange={() => setLayers(previous => ({...previous,[key]:!previous[key]}))}/>{{ma:'均线',channel:'通道/支撑/反转',fib:'黄金分割',td:'九转',signals:'策略信号'}[key]}</label>)}</div>}
-			{mode === 'daily' && <div className="sbc-summary" role="status">{sbc.status || (sbc.data && <>通道斜率 {sbcValue(sbc.data.points.at(-1)?.ch_slope_deg, 1)}° · 支撑 {sbcValue(sbc.data.points.at(-1)?.ch_supp_price, 2)} · 反转 {sbcValue(sbc.data.points.at(-1)?.reversal_line, 2)}{sbc.data.activity && <> · 近{sbc.data.activity.days.length}日均振 {sbc.data.activity.avg_amp}% · {sbc.data.activity.rating}</>} · {sbc.data.strategy.is_matched ? `评分 ${sbc.data.strategy.score} · 介入 ${sbc.data.strategy.entry_price} · 止损 ${sbc.data.strategy.stop_loss} · 目标 ${sbc.data.strategy.target_price_1}` : sbc.data.strategy.reason || '未命中策略'}{sbc.data.market_meta?.stale && ' · 陈旧行情'} · 截至 {sbc.data.trade_date}</>)}</div>}
+			{<div className="sbc-toolbar"><strong>SBC</strong>{(Object.keys(layers) as Array<keyof typeof layers>).filter(key=>mode==='daily'||key==='channel'||key==='signals').map(key => <label key={key}><input type="checkbox" checked={layers[key]} onChange={() => setLayers(previous => ({...previous,[key]:!previous[key]}))}/>{{ma:'均线',channel:'通道/支撑/反转',fib:'黄金分割',td:'九转',signals:'策略信号'}[key]}</label>)}</div>}
+			{<div className="sbc-summary" role="status">{mode==='intraday' && <span>日线关键价位参考 · </span>}{sbc.status || (sbc.data && <>通道斜率 {sbcValue(sbc.data.points.at(-1)?.ch_slope_deg, 1)}° · 支撑 {sbcValue(sbc.data.points.at(-1)?.ch_supp_price, 2)} · 反转 {sbcValue(sbc.data.points.at(-1)?.reversal_line, 2)}{sbc.data.activity && <> · 近{sbc.data.activity.days.length}日均振 {sbc.data.activity.avg_amp}% · {sbc.data.activity.rating}</>} · {sbc.data.strategy.is_matched ? `评分 ${sbc.data.strategy.score} · 介入 ${sbc.data.strategy.entry_price} · 止损 ${sbc.data.strategy.stop_loss} · 目标 ${sbc.data.strategy.target_price_1}` : sbc.data.strategy.reason || '未命中策略'}{sbc.data.market_meta?.stale && ' · 陈旧行情'} · 截至 {sbc.data.trade_date}</>)}</div>}
 			<div className="kline-viewport-tools"><button type="button" onClick={()=>zoom(-1)}>＋ 放大</button><button type="button" onClick={()=>zoom(1)}>－ 缩小</button><button type="button" onClick={()=>pan(1)}>← 历史</button><button type="button" onClick={()=>pan(-1)}>最新 →</button><button type="button" onClick={()=>{setView({count:100,offset:0});setHoveredIndex(null);}}>回到最新</button><span>{sorted.length} / {all.length} 根 · 滚轮缩放，Shift+滚轮平移</span></div>
             <svg ref={svg} className="kline-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${periodLabel}价格、涨跌幅和成交量图`}>
 				{percentTicks.map((tick) => {
@@ -207,12 +207,9 @@ function KLineCanvas({ lines, symbol, state = 'ready', mode = 'daily', periodLab
 				{mode === 'intraday' ? (
 					<>
 						<path className="kline-close-line" d={linePath} />
-						{sorted.length > 1 && <path className="kline-average-line" d={sorted.map((line, index) => {
-							const start = Math.max(0, index - 19);
-							const average = sorted.slice(start, index + 1).reduce((sum, item) => sum + item.close, 0) / (index - start + 1);
-							const x = left + index * step + step / 2;
-							return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${priceY(average).toFixed(2)}`;
-						}).join(' ')} />}
+                        <path className="kline-average-line" d={sorted.map((line,index)=>line.vwap && Number.isFinite(line.vwap) ? `${index===0||!sorted[index-1].vwap?'M':'L'} ${(left+index*step+step/2).toFixed(2)} ${priceY(line.vwap).toFixed(2)}`:'').join(' ')}/>
+                        <SBCIntradayOverlay lines={all} reference={sbc.data} layers={layers} y={priceY} left={left} right={width-right} top={chartTop} bottom={chartBottom}/>
+
 						{sorted.map((line, index) => {
 							const x = left + index * step + step / 2;
 							const barTop = volumeY(line.volume);
@@ -254,7 +251,7 @@ function KLineCanvas({ lines, symbol, state = 'ready', mode = 'daily', periodLab
 				<div><span>成交额</span><b>{formatAmount(hoveredLine.amount)}</b></div>
 				<div><span>换手率</span><b>{hoveredLine.turnover_rate != null && Number.isFinite(hoveredLine.turnover_rate) ? `${hoveredLine.turnover_rate.toFixed(2)}%` : '--'}</b></div>
 			</KLineDetails>}
-			<div className="kline-chart-legend"><span className="zero-dot" />0%基准：{referencePrice.toFixed(2)}{mode === 'intraday' && <span className="limit-note">涨跌幅范围 ±{percentRange}%</span>} <span className="volume-note">左侧涨跌幅 · 右侧价格 · 柱体为成交量</span>{mode === 'intraday' && <><span className="close-dot" />收盘价 <span className="average-dot" />20点均线</>}</div>
+			<div className="kline-chart-legend"><span className="zero-dot" />0%基准{mode==='intraday'?(suppliedPreviousClose?'（昨收）':'（首根开盘，昨收缺失）'):''}：{referencePrice.toFixed(2)}{mode === 'intraday' && <span className="limit-note">制度参考 ±{percentRange}%</span>} <span className="volume-note">左侧涨跌幅 · 右侧价格 · 柱体为成交量</span>{mode === 'intraday' && <><span className="close-dot" />价格 <span className="average-dot" />VWAP{all.at(-1)?.vwap_estimated?'（量加权估算）':!all.at(-1)?.vwap?'（数据缺失）':''}</>}</div>
 		</div>
 	);
 }

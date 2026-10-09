@@ -30,3 +30,25 @@
 @media (max-width: 480px) { .kline-chart-wrap .kline-details { grid-template-columns: minmax(0, 1fr) auto; } }
 
 .kline-details-slot { min-height: 185px; }
+
+/* ATS/SBC chart colors remain fixed independently of the application theme. */
+.kline-chart-wrap { background:#0b0c14; color:#e2e8f0; border:1px solid #252536; border-radius:6px; }
+.kline-chart-wrap .kline-grid { stroke:#202030; }
+.kline-chart-wrap .kline-zero-grid { stroke:#8899bb; }
+.kline-chart-wrap .kline-axis-label,.kline-chart-wrap .kline-percent-axis-label,.kline-chart-wrap .kline-date-label { fill:#8899bb; }
+.kline-chart-wrap .sbc-toolbar,.kline-chart-wrap .sbc-toolbar strong,.kline-chart-wrap .sbc-summary,.kline-chart-wrap .kline-chart-legend,.kline-chart-wrap .kline-viewport-tools { color:#cbd5e1; }
+.kline-chart-wrap .kline-up .kline-wick,.kline-chart-wrap .kline-up .kline-body { stroke:#ff4444; fill:#ff4444; }
+.kline-chart-wrap .kline-down .kline-wick,.kline-chart-wrap .kline-down .kline-body { stroke:#00ffff; fill:#0b0c14; }
+.kline-chart-wrap .kline-up .kline-volume { fill:#ff4444; opacity:1; }
+.kline-chart-wrap .kline-down .kline-volume { fill:#00ffff; opacity:1; }
+.kline-chart-wrap.intraday-chart .kline-down .kline-volume { fill:#00ff88; }
+.kline-chart-wrap .kline-close-line { stroke:#00b4d8; stroke-width:1.8; }
+.kline-chart-wrap .kline-average-line { stroke:#ffd700; stroke-width:1.5; stroke-dasharray:6 3; opacity:1; }
+.kline-chart-wrap .kline-chart-legend .close-dot { background:#00b4d8; }
+.kline-chart-wrap .kline-chart-legend .average-dot { background:#ffd700; }
+.kline-chart-wrap .kline-divider { stroke:#252536; }
+.kline-chart-wrap .kline-details { background:#111827; border-color:#253248; color:#e2e8f0; }
+.kline-chart-wrap .kline-details > strong,.kline-chart-wrap .kline-details span { color:#cbd5e1; }
+.kline-chart-wrap .kline-details .up { color:#ff4444; }
+.kline-chart-wrap .kline-details .down { color:#00ff88; }
+.kline-chart-wrap button { background:#181824; border-color:#353548; color:#cbd5e1; }

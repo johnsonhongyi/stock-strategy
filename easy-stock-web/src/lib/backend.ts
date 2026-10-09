@@ -280,6 +280,8 @@ export type Quote = {
 };
 
 export type KLine = {
+  vwap?: number;
+  vwap_estimated?: boolean;
   symbol: string;
   time: string;
   open: number;

@@ -15,6 +15,7 @@ export function KLineExplorer(props: KLineChartProps & {render: (props: KLineCha
   const [open,setOpen] = useState(false);
   const [maximized,setMaximized] = useState(false);
   const [size,setSize] = useState(readChartWindowSize);
+  const [reference,setReference] = useState<{key:string; lines:KLine[]}|null>(null);
   const [period,setPeriod] = useState('');
   const [retry,setRetry] = useState(0);
   const [recovering,setRecovering] = useState('');
@@ -46,6 +47,14 @@ export function KLineExplorer(props: KLineChartProps & {render: (props: KLineCha
     },error=>{if(!abort.signal.aborted)setLoaded({key,lines:[],state:'error',error:error instanceof Error?error.message:'行情加载失败'});});
     return ()=>abort.abort();
   },[key,needsFetch]);
+  const referenceKey=JSON.stringify([props.config?.backendUrl,props.config?.token,symbol,props.market]);
+  const intraday=(active?.[2] || props.mode)==='intraday';
+  useEffect(()=>{
+    if(!intraday || !props.config || !symbol)return;
+    const abort=new AbortController();
+    requestJSON<{data:KLine[]}>(props.config,`/api/v1/quotes/kline?symbol=${encodeURIComponent(symbol)}&period=day&limit=240${props.market?`&market=${encodeURIComponent(props.market)}`:''}`,{signal:abort.signal}).then(result=>{if(!abort.signal.aborted)setReference({key:referenceKey,lines:result.data||[]});},()=>{if(!abort.signal.aborted)setReference({key:referenceKey,lines:[]});});
+    return ()=>abort.abort();
+  },[referenceKey,intraday]);
   useEffect(()=>{
     if(!open)return;
     const previous=document.body.style.overflow; document.body.style.overflow='hidden';
@@ -65,7 +74,7 @@ export function KLineExplorer(props: KLineChartProps & {render: (props: KLineCha
     observer.observe(element);return ()=>{setSize(measured.current);observer.disconnect();};
   },[open,maximized]);
   const current=loaded?.key===key?loaded:null;
-  const chartProps={...props,onInvalidData:recover,lines:needsFetch?current?.lines || []:props.lines,state:needsFetch?current?.state || 'loading' as const:props.state,periodLabel:label,mode:active?.[2] || props.mode,compact:open?false:props.compact};
+  const chartProps={...props,referenceLines:intraday?(reference?.key===referenceKey?reference.lines:[]):undefined,onInvalidData:recover,lines:needsFetch?current?.lines || []:props.lines,state:needsFetch?current?.state || 'loading' as const:props.state,periodLabel:label,mode:active?.[2] || props.mode,compact:open?false:props.compact};
   const controls=<div className="kline-explorer-toolbar">
     <div className="kline-period-controls">{periods.map(item=><button type="button" disabled={!symbol||!props.config} key={item[0]} className={label===item[0]?'active':''} onClick={()=>setPeriod(item[0])}>{item[0]}</button>)}</div>
     <div className="kline-window-actions">{props.onNavigate&&<><button type="button" onClick={()=>props.onNavigate?.(-1)} aria-label="上一只股票">↑</button><button type="button" onClick={()=>props.onNavigate?.(1)} aria-label="下一只股票">↓</button></>}{open?<><button type="button" onClick={()=>setMaximized(value=>!value)}>{maximized?'还原':'最大化'}</button><button type="button" onClick={()=>setOpen(false)} aria-label="关闭放大窗口">关闭 ✕</button></>:<button ref={opener} type="button" onClick={()=>{setSize(readChartWindowSize());setOpen(true);}} aria-label="放大 K 线图">⛶ 放大</button>}</div>

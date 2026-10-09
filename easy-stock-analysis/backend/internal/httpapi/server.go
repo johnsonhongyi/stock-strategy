@@ -834,7 +834,7 @@ func normalizeKLinePeriod(lines []foundation.KLine, period string) []foundation.
 	if len(filtered) == 0 {
 		return lines
 	}
-	return filtered
+	return intradayVWAP(filtered)
 }
 
 func (s *Server) news(w http.ResponseWriter, r *http.Request) {

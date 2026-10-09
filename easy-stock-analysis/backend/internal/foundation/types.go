@@ -31,6 +31,8 @@ type Quote struct {
 }
 
 type KLine struct {
+	VWAP          float64    `json:"vwap,omitempty"`
+	VWAPEstimated bool       `json:"vwap_estimated,omitempty"`
 	Symbol        string     `json:"symbol"`
 	Time          time.Time  `json:"time"`
 	Open          float64    `json:"open"`
