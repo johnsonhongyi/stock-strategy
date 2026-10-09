@@ -79,10 +79,10 @@ function KLineCanvas({ referenceLines, lines, symbol, state = 'ready', mode = 'd
 	const [selectedIndex, setHoveredIndex] = useState<number | null>(null);
 	const [layers, setLayers] = useState(defaultSBCLayers);
 	const all = useMemo(() => [...lines].sort((a,b) => Date.parse(a.time)-Date.parse(b.time)), [lines]);
-    const [view, setView] = useState({count: 100, offset: 0});
+    const [view, setView] = useState({count: mode === 'intraday' ? 1000 : 100, offset: 0});
     const svg = useRef<SVGSVGElement>(null);
     const drag = useRef<{x: number; offset: number} | null>(null);
-    useEffect(() => { setView({count: 100, offset: 0}); setHoveredIndex(null); }, [symbol, periodLabel]);
+    useEffect(() => { setView({count: mode === 'intraday' ? 1000 : 100, offset: 0}); setHoveredIndex(null); }, [symbol, periodLabel]);
     const count = Math.min(all.length, view.count);
     const end = Math.max(count, all.length - view.offset);
     const startIndex = Math.max(0, end - count);
@@ -194,7 +194,7 @@ function KLineCanvas({ referenceLines, lines, symbol, state = 'ready', mode = 'd
 		<div className={`kline-chart-wrap ${mode === 'intraday' ? 'intraday-chart' : 'daily-chart'}${compact ? ' compact' : ''}`}>
 			{<div className="sbc-toolbar"><strong>SBC</strong>{(Object.keys(layers) as Array<keyof typeof layers>).filter(key=>mode==='daily'||key==='channel'||key==='signals').map(key => <label key={key}><input type="checkbox" checked={layers[key]} onChange={() => setLayers(previous => ({...previous,[key]:!previous[key]}))}/>{{ma:'均线',channel:'通道/支撑/反转',fib:'黄金分割',td:'九转',signals:'策略信号'}[key]}</label>)}</div>}
 			{<div className="sbc-summary" role="status">{mode==='intraday' && <span>日线关键价位参考 · </span>}{sbc.status || (sbc.data && <>通道斜率 {sbcValue(sbc.data.points.at(-1)?.ch_slope_deg, 1)}° · 支撑 {sbcValue(sbc.data.points.at(-1)?.ch_supp_price, 2)} · 反转 {sbcValue(sbc.data.points.at(-1)?.reversal_line, 2)}{sbc.data.activity && <> · 近{sbc.data.activity.days.length}日均振 {sbc.data.activity.avg_amp}% · {sbc.data.activity.rating}</>} · {sbc.data.strategy.is_matched ? `评分 ${sbc.data.strategy.score} · 介入 ${sbc.data.strategy.entry_price} · 止损 ${sbc.data.strategy.stop_loss} · 目标 ${sbc.data.strategy.target_price_1}` : sbc.data.strategy.reason || '未命中策略'}{sbc.data.market_meta?.stale && ' · 陈旧行情'} · 截至 {sbc.data.trade_date}</>)}</div>}
-			<div className="kline-viewport-tools"><button type="button" onClick={()=>zoom(-1)}>＋ 放大</button><button type="button" onClick={()=>zoom(1)}>－ 缩小</button><button type="button" onClick={()=>pan(1)}>← 历史</button><button type="button" onClick={()=>pan(-1)}>最新 →</button><button type="button" onClick={()=>{setView({count:100,offset:0});setHoveredIndex(null);}}>回到最新</button><span>{sorted.length} / {all.length} 根 · 滚轮缩放，Shift+滚轮平移</span></div>
+			<div className="kline-viewport-tools"><button type="button" onClick={()=>zoom(-1)}>＋ 放大</button><button type="button" onClick={()=>zoom(1)}>－ 缩小</button><button type="button" onClick={()=>pan(1)}>← 历史</button><button type="button" onClick={()=>pan(-1)}>最新 →</button><button type="button" onClick={()=>{setView({count:mode === 'intraday' ? 1000 : 100,offset:0});setHoveredIndex(null);}}>回到最新</button><span>{sorted.length} / {all.length} 根 · 滚轮缩放，Shift+滚轮平移</span></div>
             <svg ref={svg} className="kline-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${periodLabel}价格、涨跌幅和成交量图`}>
 				{percentTicks.map((tick) => {
 					const y = percentY(tick);
@@ -226,7 +226,7 @@ function KLineCanvas({ referenceLines, lines, symbol, state = 'ready', mode = 'd
 					const change = barChangePercent(index);
 					return <g className={rising ? 'kline-up' : 'kline-down'} key={`${line.time}-${index}`}><title>{`${formatLongDate(line.time)} 开 ${line.open.toFixed(2)} 高 ${line.high.toFixed(2)} 低 ${line.low.toFixed(2)} 收 ${line.close.toFixed(2)}（${change >= 0 ? '+' : ''}${change.toFixed(2)}%）成交量 ${formatVolume(line.volume)}`}</title><line className="kline-wick" x1={x} x2={x} y1={priceY(line.high)} y2={priceY(line.low)} /><rect className="kline-body" x={x - bodyWidth / 2} y={bodyTop} width={bodyWidth} height={Math.max(bodyBottom - bodyTop, 1.5)} /><rect className="kline-volume" x={x - bodyWidth / 2} y={barTop} width={bodyWidth} height={volumeBottom - barTop} /></g>;
 				})}
-				{visibleSBC && <SBCOverlay data={visibleSBC} layers={layers} x={i => left+i*step+step/2} y={priceY} left={left} right={width-right} top={chartTop} bottom={chartBottom}/>}
+				{mode === 'daily' && visibleSBC && <SBCOverlay data={visibleSBC} layers={layers} x={i => left+i*step+step/2} y={priceY} left={left} right={width-right} top={chartTop} bottom={chartBottom}/>}
 				{labelIndexes.map((index) => {
 					const line = sorted[index];
 					const x = left + index * step + step / 2;

@@ -13,7 +13,7 @@ export function SBCIntradayOverlay({lines,reference,layers,y,left,right,top,bott
  if(layers.channel&&point) entries.push(['上轨',Number(point.ch_upper),'#ffb454','6 3'],['反转',Number(point.reversal_line),C.reversal,'8 3 2 3'],['支撑',Number(point.ch_supp_price),C.support,'6 3']);
  if(layers.signals&&reference?.strategy.is_matched) entries.push(['目标',reference.strategy.target_price_1||0,'#00ff88','8 3 2 3']);
  const occupied:number[]=[];
- return <g pointerEvents="none" fontSize="11">{entries.map(([label,value,color,dash])=>{
+ return <g data-sbc-layer="intraday" pointerEvents="none" fontSize="11">{entries.map(([label,value,color,dash])=>{
   const cy=y(value);if(!Number.isFinite(cy)||value<=0||cy<top||cy>bottom)return null;
   let labelY=cy;while(occupied.some(other=>Math.abs(other-labelY)<15)&&labelY<bottom-15)labelY+=15;
   if(occupied.some(other=>Math.abs(other-labelY)<15)){labelY=cy;while(occupied.some(other=>Math.abs(other-labelY)<15)&&labelY>top+15)labelY-=15;}

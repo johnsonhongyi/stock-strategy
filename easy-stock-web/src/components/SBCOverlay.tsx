@@ -24,7 +24,7 @@ export function SBCOverlay({data, layers, x, y, left, right, top, bottom}: {
   };
   const plans = ['sig_launch','sig_escape'].map(field => ({field, markers:clusterSignalMarkers(points.flatMap((point,i)=>Number(point[field])===1?[i]:[]))}));
   const strategy = data.strategy;
-  return <g pointerEvents="none" fontSize="10">
+  return <g data-sbc-layer="daily" pointerEvents="none" fontSize="10">
     {Object.entries(colors).filter(([field]) => field.startsWith('ma') ? layers.ma : layers.channel).map(([field, color]) =>
       <path key={field} d={path(field, field.startsWith('ch_') ? start : 0)} fill="none" stroke={color} strokeWidth={field === 'chan_kx' ? 2 : field.startsWith('ch_') ? 1.5 : 1} strokeDasharray={field === 'ch_mid' ? '5 3' : undefined} />)}
     {layers.channel && (()=>{
