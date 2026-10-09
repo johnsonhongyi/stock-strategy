@@ -17,6 +17,13 @@ describe('SBC period layer isolation',()=>{
   const html=renderToStaticMarkup(<KLineChart lines={session} symbol="600733.SH" mode="intraday" periodLabel="分时"/>);
   expect(html).toContain('238 / 238');
  });
+ it('renders all five sessions without recreating per-bar locale formatters',()=>{
+  vi.stubGlobal('window',{innerWidth:1600,innerHeight:1000});
+  const formatter=vi.spyOn(Date.prototype,'toLocaleString');
+  const session=Array.from({length:1200},(_,i)=>({...lines[0],time:new Date(Date.UTC(2026,9,5+Math.floor(i/240),1,31+i%240)).toISOString()}));
+  const html=renderToStaticMarkup(<KLineChart lines={session} symbol="600733.SH" mode="intraday" periodLabel="5日分时"/>);
+  expect(html).toContain('1200 / 1200');expect(formatter).not.toHaveBeenCalled();formatter.mockRestore();
+ });
  it('keeps candle indicator overlays in daily mode',()=>{
   vi.stubGlobal('window',{innerWidth:1600,innerHeight:1000});
   const html=renderToStaticMarkup(<KLineChart lines={lines} symbol="600733.SH" mode="daily" periodLabel="日K"/>);
