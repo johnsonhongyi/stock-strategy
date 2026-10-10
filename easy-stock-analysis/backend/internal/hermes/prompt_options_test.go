@@ -174,9 +174,13 @@ func TestPreparePromptSandboxCanDisableAllTools(t *testing.T) {
 }
 
 func TestSandboxSiteCustomizeBlocksHostFilesAndSubprocesses(t *testing.T) {
-	python, err := exec.LookPath("python3")
+	pythonCommand := "python3"
+	if runtime.GOOS == "windows" {
+		pythonCommand = "python.exe"
+	}
+	python, err := exec.LookPath(pythonCommand)
 	if err != nil {
-		t.Skip("python3 is unavailable")
+		t.Skipf("%s is unavailable", pythonCommand)
 	}
 	hostDir := t.TempDir()
 	hostFile := filepath.Join(hostDir, "outside.txt")

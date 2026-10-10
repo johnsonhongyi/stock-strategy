@@ -38,14 +38,17 @@ import (
 	"easy-stock/backend/internal/sector"
 	"easy-stock/backend/internal/stockanalysis"
 	"easy-stock/backend/internal/strategy/inflection"
+	"easy-stock/backend/internal/linkage"
 )
 
 type Server struct {
+	linkageContextMu      sync.Mutex
 	tdx                   *tdx.Client
 	marketNetwork         *marketnetwork.Config
 	ladderThemeAI         *ladderThemeAI
 	mux                   *http.ServeMux
 	token                 string
+	linkage               *linkage.Service
 	realtimeProvider      RealtimeProvider
 	kLinePrimary          KLineProvider
 	kLineFallback         KLineProvider
@@ -204,6 +207,7 @@ func NewServer(config any) *Server {
 		}
 	}
 	if cfg.MarketDataStore != nil {
+		cfg.MarketDataStore.SetTDXDailyDirectory(cfg.TDXDailyDirectory)
 		cfg.KLinePrimary = &marketFirstKLineProvider{
 			store:         cfg.MarketDataStore,
 			international: international,
@@ -225,7 +229,10 @@ func NewServer(config any) *Server {
 			startupErrors = append(startupErrors, fmt.Errorf("open TDX external cache: %w", err))
 		} else {
 			if usingDefaultKLine {
-				cfg.KLinePrimary = &tdxFirstKLineProvider{tdx: tdxClient, fallback: cfg.KLinePrimary}
+				cfg.KLinePrimary = &tdxFirstKLineProvider{
+					tdx: tdxClient, fallback: cfg.KLinePrimary,
+					preferLocalDaily: cfg.MarketDataStore != nil && cfg.MarketDataStore.TDXDailyEnabled(),
+				}
 			}
 		}
 	}
@@ -352,13 +359,13 @@ func NewServer(config any) *Server {
 		futuresPosition:       cfg.FuturesPosition,
 		marketOverview:        cfg.MarketOverview,
 		inflection:            cfg.Inflection,
-		themeSnapshots:        newThemeSnapshotCache(30 * time.Second),
+		themeSnapshots:        newThemeSnapshotCache(30 * time.Minute),
 		themeProgress:         newThemeProgressCache(),
 		limitUpSnapshots:      newLimitUpLadderCache(30 * time.Second),
 		limitUpProgress:       &shortTermCache[limitUpLadderData]{},
 		emotionProgress:       &shortTermCache[marketemotion.History]{},
 		stockDirectories:      newStockDirectoryCache(6 * time.Hour),
-		hotStockRanks:         newHotStockRankCache(2 * time.Minute),
+		hotStockRanks:         newHotStockRankCache(30 * time.Minute),
 		marketSnapshots:       newMarketOverviewCache(45 * time.Second),
 		marketEmotionIntraday: newMarketEmotionIntradayCache(marketEmotionIntradayTTL),
 		reviewStore:           cfg.ReviewStore,
@@ -380,6 +387,14 @@ func NewServer(config any) *Server {
 		startupError:          errors.Join(startupErrors...),
 		logger:                cfg.Logger,
 		tokenUsage:            tokenUsage,
+	}
+	if strings.TrimSpace(cfg.LinkageDBPath) != "" {
+		service, err := linkage.NewService(cfg.LinkageDBPath, cfg.LinkageTargetsPath)
+		if err != nil {
+			cfg.Logger.Printf("level=warn event=linkage_unavailable error=%q", err)
+		} else {
+			s.linkage = service
+		}
 	}
 	if kaipanlaService != nil {
 		s.themeRadarStore = kaipanlaService.Store()
@@ -441,6 +456,9 @@ func (s *Server) Close() error {
 		s.emotionProgress.close()
 	}
 	var closeErrors []error
+	if s.linkage != nil {
+		closeErrors = append(closeErrors, s.linkage.Close())
+	}
 	if s.tdx != nil {
 		closeErrors = append(closeErrors, s.tdx.Close())
 	}
@@ -478,12 +496,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	loggedWriter.Header().Set("X-Request-ID", requestID)
 	defer s.logRequest(r, loggedWriter, requestID, startedAt)
 
-	s.withCORS(loggedWriter, r)
-	if r.Method == http.MethodOptions {
-		loggedWriter.WriteHeader(http.StatusNoContent)
-		return
+	isLinkage := strings.HasPrefix(r.URL.Path, "/api/v1/linkage/")
+	if !isLinkage {
+		s.withCORS(loggedWriter, r)
+		if r.Method == http.MethodOptions {
+			loggedWriter.WriteHeader(http.StatusNoContent)
+			return
+		}
 	}
-	if !s.authorized(r) {
+	if isLinkage && !s.authorizedLinkage(r) || !isLinkage && !s.authorized(r) {
 		writeError(loggedWriter, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -557,6 +578,15 @@ func (s *Server) refreshMasterySnapshot(ctx context.Context, force bool) {
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("GET /api/v1/linkage/targets", s.linkageTargets)
+	s.mux.HandleFunc("POST /api/v1/linkage/commands", s.linkageSubmit)
+	s.mux.HandleFunc("GET /api/v1/linkage/operations/{operation_id}", s.linkageOperation)
+	s.mux.HandleFunc("GET /api/v1/linkage/context", s.linkageContextHandler)
+	s.mux.HandleFunc("POST /api/v1/linkage/context/evidence", s.linkageEvidenceHandler)
+	s.mux.HandleFunc("GET /api/v1/linkage/events", s.linkageEventsHandler)
+	s.mux.HandleFunc("GET /api/v1/linkage/attention", s.linkageAttentionSnapshot)
+	s.mux.HandleFunc("POST /api/v1/linkage/attention/intents", s.linkageAttentionIntent)
+	s.mux.HandleFunc("POST /api/v1/linkage/attention/intents/batch", s.linkageAttentionBatch)
 	s.mux.HandleFunc("GET /api/health", s.health)
 	s.mux.HandleFunc("GET /api/v1/system/status", s.systemStatus)
 	s.mux.HandleFunc("GET /api/v1/market-data/network", s.marketNetworkSettings)

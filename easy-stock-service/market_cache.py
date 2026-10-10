@@ -17,7 +17,6 @@ import urllib.parse
 import urllib.request
 import data_store
 import market_network
-import market_network
 
 
 SVC = os.path.dirname(os.path.abspath(__file__))
@@ -39,6 +38,8 @@ _MARKET_HOSTS = {
     "api.kraken.com",
     "data-api.binance.vision",
     "data.10jqka.com.cn",
+    "emappdata.eastmoney.com",
+    "push2his.eastmoney.com",
     "eq.10jqka.com.cn",
     "flash-api.xuangubao.cn",
     "hq.sinajs.cn",
@@ -143,8 +144,8 @@ def _ttl_for(url):
         return 24 * 60 * 60
     if "limit_up_pool" in path and query.get("date"):
         return 30 * 24 * 60 * 60
-    if "10jqka.com.cn" in host or "stockrank" in path:
-        return 30
+    if market_network._is_heat_or_sector_request(url):
+        return 30 * 60
     if "news" in path or "telegraph" in path:
         return 2 * 60
     return 5 * 60
@@ -159,7 +160,7 @@ def _stale_limit(url):
             or (host == "data-api.binance.vision" and "/ticker/" in path)
             or host in {"hq.sinajs.cn", "qt.gtimg.cn"}):
         return 2 * 60 * 60
-    if "10jqka.com.cn" in host or "stockrank" in path:
+    if "10jqka.com.cn" in host or market_network._is_heat_or_sector_request(url):
         return 12 * 60 * 60
     if "kline" in path or path.endswith("/ohlc") or path.endswith("/chart") or query.get("klt") or query.get("scale"):
         return 30 * 24 * 60 * 60

@@ -33,6 +33,8 @@ type refreshAttempt struct {
 
 func (p *marketFirstKLineProvider) KLine(ctx context.Context, symbol string, period string, limit int) ([]foundation.KLine, error) {
 	market := marketbars.MarketFromContext(ctx)
+	_, inferredMarket := marketbars.NormalizeSymbol(symbol, market)
+	if inferredMarket != "" && inferredMarket != "AUTO" { market = inferredMarket }
 	if limit <= 0 {
 		limit = 120
 	}
@@ -65,6 +67,15 @@ func (p *marketFirstKLineProvider) daily(ctx context.Context, symbol string, mar
 		return nil, err
 	}
 	forceRefresh := marketcache.RefreshFromContext(ctx)
+	if market == "CN" && p.store.TDXDailyEnabled() {
+		if !found {
+			return nil, fmt.Errorf("no local TDX or SQLite daily bars for %s", symbol)
+		}
+		if dailyBarsBehind(cached, expected) {
+			return markKLinesStale(cached, fmt.Errorf("local TDX daily bars have not reached completed session %s", expected)), nil
+		}
+		return cached, nil
+	}
 	if found && !forceRefresh {
 		if !dailyBarsBehind(cached, expected) {
 			return cached, nil
@@ -120,6 +131,16 @@ func (p *marketFirstKLineProvider) derivedPeriod(ctx context.Context, symbol str
 	found = found && len(cached) > 0
 	derived := aggregateDailyKLines(cached, period)
 	forceRefresh := marketcache.RefreshFromContext(ctx)
+	if market == "CN" && p.store.TDXDailyEnabled() {
+		if len(derived) == 0 {
+			return nil, fmt.Errorf("no local TDX or SQLite daily bars for %s", symbol)
+		}
+		result := lastKLines(derived, limit)
+		if dailyBarsBehind(cached, expected) {
+			return markKLinesStale(result, fmt.Errorf("local TDX daily bars have not reached completed session %s", expected)), nil
+		}
+		return result, nil
+	}
 	if found && !forceRefresh && len(derived) > 0 {
 		if !dailyBarsBehind(cached, expected) {
 			return lastKLines(derived, limit), nil
@@ -154,14 +175,16 @@ func (p *marketFirstKLineProvider) derivedPeriod(ctx context.Context, symbol str
 }
 
 func latestCompletedDailyDate(market string) (string, error) {
-	now := time.Now()
+	return latestCompletedDailyDateAt(market, time.Now())
+}
+
+func latestCompletedDailyDateAt(market string, now time.Time) (string, error) {
 	if strings.EqualFold(strings.TrimSpace(market), "CN") || strings.TrimSpace(market) == "" {
-		// Wait for the close-job window before treating today's A-share daily bar
-		// as complete. The scheduled append job runs at 15:40 China time.
+		// The shared TDX close snapshot is considered complete after its 16:05 run.
 		chinaNow := now.In(shanghaiLocation)
-		cutoff := time.Date(chinaNow.Year(), chinaNow.Month(), chinaNow.Day(), 15, 40, 0, 0, shanghaiLocation)
+		cutoff := time.Date(chinaNow.Year(), chinaNow.Month(), chinaNow.Day(), 16, 10, 0, 0, shanghaiLocation)
 		if chinaNow.Before(cutoff) {
-			now = now.Add(-40 * time.Minute)
+			now = time.Date(chinaNow.Year(), chinaNow.Month(), chinaNow.Day(), 14, 59, 0, 0, shanghaiLocation)
 		}
 	}
 	return tradingcalendar.LatestCompletedDate(market, now)

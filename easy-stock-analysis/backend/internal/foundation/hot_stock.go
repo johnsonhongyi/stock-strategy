@@ -13,5 +13,6 @@ type HotStockRankList struct {
 	SourceName string
 	Items      []HotStockRankItem
 	FetchedAt  time.Time
+	Stale      bool
 	Error      string
 }

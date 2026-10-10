@@ -62,6 +62,9 @@ func Open(path string) (*Cache, error) {
 		)`,
 		`CREATE INDEX IF NOT EXISTS market_provider_http_cache_fetched_at
 			ON market_provider_http_cache(fetched_at)`,
+		`CREATE TABLE IF NOT EXISTS market_provider_rate_limits (
+			provider TEXT PRIMARY KEY, failure_count INTEGER NOT NULL DEFAULT 0,
+			blocked_until INTEGER NOT NULL, last_status INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			_ = db.Close()

@@ -109,7 +109,8 @@ func (client *Client) loadTHS(ctx context.Context, limit int) foundation.HotStoc
 			} `json:"stock_list"`
 		} `json:"data"`
 	}
-	if err := client.doJSON(request, &payload); err != nil {
+	fetchedAt, stale, err := client.doJSON(request, &payload)
+	if err != nil {
 		list.Error = sourceError("同花顺", err)
 		return list
 	}
@@ -117,7 +118,7 @@ func (client *Client) loadTHS(ctx context.Context, limit int) foundation.HotStoc
 		list.Error = firstNonEmpty(strings.TrimSpace(payload.StatusMsg), "同花顺热榜暂不可用")
 		return list
 	}
-	list.FetchedAt = time.Now()
+	list.FetchedAt, list.Stale = fetchedAt, stale
 	list.Items = normalizeItems(len(payload.Data.Stocks), limit, func(index int) (string, string, int) {
 		item := payload.Data.Stocks[index]
 		return item.Code, item.Name, item.Order
@@ -149,7 +150,8 @@ func (client *Client) loadEastMoney(ctx context.Context, limit int) foundation.H
 			Rank   int    `json:"rk"`
 		} `json:"data"`
 	}
-	if err := client.doJSON(request, &payload); err != nil {
+	fetchedAt, stale, err := client.doJSON(request, &payload)
+	if err != nil {
 		list.Error = sourceError("东方财富", err)
 		return list
 	}
@@ -157,7 +159,7 @@ func (client *Client) loadEastMoney(ctx context.Context, limit int) foundation.H
 		list.Error = firstNonEmpty(strings.TrimSpace(payload.Message), "东方财富热榜暂不可用")
 		return list
 	}
-	list.FetchedAt = time.Now()
+	list.FetchedAt, list.Stale = fetchedAt, stale
 	list.Items = normalizeItems(len(payload.Data), limit, func(index int) (string, string, int) {
 		item := payload.Data[index]
 		return item.Symbol, "", item.Rank
@@ -168,17 +170,23 @@ func (client *Client) loadEastMoney(ctx context.Context, limit int) foundation.H
 	return list
 }
 
-func (client *Client) doJSON(request *http.Request, target any) error {
+func (client *Client) doJSON(request *http.Request, target any) (time.Time, bool, error) {
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return err
+		return time.Time{}, false, err
 	}
 	defer response.Body.Close()
+	fetchedAt := time.Now()
+	if value := strings.TrimSpace(response.Header.Get("X-Stock-Fetched-At")); value != "" {
+		if parsed, parseErr := time.Parse(time.RFC3339Nano, value); parseErr == nil { fetchedAt = parsed }
+	}
+	stale := strings.EqualFold(strings.TrimSpace(response.Header.Get("X-Stock-Cache")), "STALE")
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
-		return fmt.Errorf("HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(data)))
+		return fetchedAt, stale, fmt.Errorf("HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(data)))
 	}
-	return json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(target)
+	err = json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(target)
+	return fetchedAt, stale, err
 }
 
 func normalizeItems(length, limit int, itemAt func(int) (string, string, int)) []foundation.HotStockRankItem {

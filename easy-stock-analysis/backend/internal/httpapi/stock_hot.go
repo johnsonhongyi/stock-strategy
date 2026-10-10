@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -29,6 +30,7 @@ type hotStockSourceStatus struct {
 	Count     int       `json:"count"`
 	Error     string    `json:"error,omitempty"`
 	FetchedAt time.Time `json:"fetched_at,omitempty"`
+	Stale     bool      `json:"stale,omitempty"`
 }
 
 type hotStockRankData struct {
@@ -44,6 +46,8 @@ type hotStockRankCache struct {
 	mu       sync.Mutex
 	ttl      time.Duration
 	snapshot hotStockRankData
+	loading  bool
+	wait     chan struct{}
 }
 
 func newHotStockRankCache(ttl time.Duration) *hotStockRankCache {
@@ -53,7 +57,7 @@ func newHotStockRankCache(ttl time.Duration) *hotStockRankCache {
 func (cache *hotStockRankCache) current(force bool) (hotStockRankData, bool) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	if force || len(cache.snapshot.Stocks) == 0 || !time.Now().Before(cache.snapshot.ExpiresAt) {
+	if force || cache.snapshot.ExpiresAt.IsZero() || !time.Now().Before(cache.snapshot.ExpiresAt) {
 		return hotStockRankData{}, false
 	}
 	return cloneHotStockRankData(cache.snapshot), true
@@ -66,11 +70,27 @@ func (cache *hotStockRankCache) latest() hotStockRankData {
 }
 
 func (cache *hotStockRankCache) store(data hotStockRankData) {
-	if len(data.Stocks) == 0 {
-		return
-	}
 	cache.mu.Lock()
 	cache.snapshot = cloneHotStockRankData(data)
+	cache.mu.Unlock()
+}
+
+func (cache *hotStockRankCache) beginRefresh() (<-chan struct{}, bool) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.loading { return cache.wait, false }
+	cache.loading = true
+	cache.wait = make(chan struct{})
+	return cache.wait, true
+}
+
+func (cache *hotStockRankCache) finishRefresh() {
+	cache.mu.Lock()
+	if cache.loading {
+		cache.loading = false
+		close(cache.wait)
+		cache.wait = nil
+	}
 	cache.mu.Unlock()
 }
 
@@ -96,14 +116,34 @@ func (s *Server) hotStockRanksHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "hot stock provider is unavailable")
 		return
 	}
-	force := r.URL.Query().Get("refresh") == "1"
-	if cached, ok := s.hotStockRanks.current(force); ok {
-		writeJSON(w, http.StatusOK, map[string]any{"data": cached})
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), 18*time.Second)
 	defer cancel()
+	data, err := s.loadHotStockRanks(ctx, r.URL.Query().Get("refresh") == "1")
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "hot stock ranks are temporarily unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": data})
+}
+
+func (s *Server) loadHotStockRanks(ctx context.Context, force bool) (hotStockRankData, error) {
+	if s.hotStockProvider == nil {
+		return hotStockRankData{}, errors.New("hot stock provider is unavailable")
+	}
+	if cached, ok := s.hotStockRanks.current(force); ok {
+		return cached, nil
+	}
+	wait, leader := s.hotStockRanks.beginRefresh()
+	if !leader {
+		select {
+		case <-wait:
+			return s.hotStockRanks.latest(), nil
+		case <-ctx.Done():
+			return hotStockRankData{}, ctx.Err()
+		}
+	}
+	defer s.hotStockRanks.finishRefresh()
+
 	listChannel := make(chan []foundation.HotStockRankList, 1)
 	directoryChannel := make(chan stockDirectoryData, 1)
 	go func() {
@@ -124,12 +164,13 @@ func (s *Server) hotStockRanksHandler(w http.ResponseWriter, r *http.Request) {
 	if len(data.Stocks) == 0 {
 		if stale := s.hotStockRanks.latest(); len(stale.Stocks) > 0 {
 			stale.Stale = true
-			writeJSON(w, http.StatusOK, map[string]any{"data": stale})
-			return
+			stale.ExpiresAt = data.ExpiresAt
+			stale.Sources = data.Sources
+			data = stale
 		}
 	}
 	s.hotStockRanks.store(data)
-	writeJSON(w, http.StatusOK, map[string]any{"data": data})
+	return data, nil
 }
 
 func buildHotStockRankData(lists []foundation.HotStockRankList, directory []stockDirectoryEntry, expiresAt time.Time) hotStockRankData {
@@ -140,11 +181,13 @@ func buildHotStockRankData(lists []foundation.HotStockRankList, directory []stoc
 	stocks := make(map[string]*hotStockEntry, hotStockRankLimit*2)
 	sources := make([]hotStockSourceStatus, 0, len(lists))
 	updatedAt := time.Time{}
+	stale := false
 	for _, list := range lists {
 		sources = append(sources, hotStockSourceStatus{
 			ID: list.Source, Name: list.SourceName, Available: len(list.Items) > 0,
-			Count: len(list.Items), Error: list.Error, FetchedAt: list.FetchedAt,
+			Count: len(list.Items), Error: list.Error, FetchedAt: list.FetchedAt, Stale: list.Stale,
 		})
+		if list.Stale { stale = true }
 		if list.FetchedAt.After(updatedAt) {
 			updatedAt = list.FetchedAt
 		}
@@ -196,7 +239,7 @@ func buildHotStockRankData(lists []foundation.HotStockRankList, directory []stoc
 	if updatedAt.IsZero() {
 		updatedAt = time.Now()
 	}
-	return hotStockRankData{Stocks: items, Sources: sources, Total: len(items), UpdatedAt: updatedAt, ExpiresAt: expiresAt}
+	return hotStockRankData{Stocks: items, Sources: sources, Total: len(items), UpdatedAt: updatedAt, ExpiresAt: expiresAt, Stale: stale}
 }
 
 func bestHotStockRank(ranks map[string]int) int {

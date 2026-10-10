@@ -120,6 +120,71 @@ func TestNativeSocketHandshakeCacheAndCancellation(t *testing.T) {
 		t.Fatal("ignored cancellation")
 	}
 }
+
+func TestEmptyDailyResponseDoesNotTriggerReconnectCooldown(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	done := make(chan error, 1)
+	go func() {
+		for connection := 0; connection < 2; connection++ {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				done <- acceptErr
+				return
+			}
+			for requestIndex := 0; requestIndex < 5; requestIndex++ {
+				head := make([]byte, 10)
+				if _, readErr := io.ReadFull(conn, head); readErr != nil {
+					conn.Close()
+					done <- readErr
+					return
+				}
+				request := make([]byte, int(le.Uint16(head[6:])))
+				if _, readErr := io.ReadFull(conn, request); readErr != nil {
+					conn.Close()
+					done <- readErr
+					return
+				}
+				body := []byte{1}
+				if requestIndex == 3 {
+					body = []byte{0, 0}
+				}
+				reply := make([]byte, 16)
+				le.PutUint16(reply[12:], uint16(len(body)))
+				le.PutUint16(reply[14:], uint16(len(body)))
+				if _, writeErr := conn.Write(append(reply, body...)); writeErr != nil {
+					conn.Close()
+					done <- writeErr
+					return
+				}
+			}
+			conn.Close()
+		}
+		done <- nil
+	}()
+
+	client, err := New(filepath.Join(t.TempDir(), "tdx.db"), []string{listener.Addr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	for _, symbol := range []string{"920305.BJ", "920305.BJ", "600733.SH"} {
+		bars, fetchErr := client.KLine(context.Background(), symbol, "day", 1)
+		if fetchErr != nil || len(bars) != 0 {
+			t.Fatalf("empty series for %s: bars=%d err=%v", symbol, len(bars), fetchErr)
+		}
+	}
+	if !client.retryAt.IsZero() {
+		t.Fatalf("empty series triggered cooldown until %s", client.retryAt)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInvalidWireBoundaries(t *testing.T) {
 	for _, s := range []string{"", "0100", "2103"} {
 		b, _ := hex.DecodeString(s)

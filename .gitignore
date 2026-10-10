@@ -7,3 +7,8 @@
 /easy-stock-web/node_modules/
 /easy-stock-web/dist/
 /easy-stock-web/tsconfig.tsbuildinfo
+
+# Local build/test caches and Python bytecode; never part of release source.
+**/.build-cache/
+**/__pycache__/
+*.py[cod]

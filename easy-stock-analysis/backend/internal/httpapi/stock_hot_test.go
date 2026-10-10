@@ -51,3 +51,18 @@ func TestHotStockRanksHandlerBuildsDeduplicatedConsensusUnion(t *testing.T) {
 		t.Fatalf("source status missing: %+v", payload.Data.Sources)
 	}
 }
+
+
+func TestHotStockRankCacheStoresEmptyFailureAndCoalescesRefresh(t *testing.T) {
+    cache := newHotStockRankCache(30 * time.Minute)
+    wait, leader := cache.beginRefresh()
+    if !leader { t.Fatal("first refresh did not become leader") }
+    duplicateWait, duplicateLeader := cache.beginRefresh()
+    if duplicateLeader || duplicateWait != wait { t.Fatal("concurrent refresh was not coalesced") }
+    cache.store(hotStockRankData{ExpiresAt: time.Now().Add(30 * time.Minute)})
+    cache.finishRefresh()
+    <-wait
+    if data, ok := cache.current(false); !ok || len(data.Stocks) != 0 {
+        t.Fatalf("empty provider failure was not cached: ok=%v data=%+v", ok, data)
+    }
+}

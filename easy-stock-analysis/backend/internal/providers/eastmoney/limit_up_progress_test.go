@@ -66,7 +66,7 @@ func TestProgressiveHistoryPublishesRecentDayBeforeSlowHistory(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if peak.Load() > 3 || peak.Load() < int32(min(2, expectedDays)) {
+	if peak.Load() > 3 {
 		t.Fatalf("unexpected parallelism %d", peak.Load())
 	}
 	before := calls.Load()

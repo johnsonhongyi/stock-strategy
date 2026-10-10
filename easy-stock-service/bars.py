@@ -20,8 +20,13 @@ UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.3
 BULK_COOLDOWN = 1800
 THROTTLE_FILE = os.path.join(SVC, "logs", "upstream_throttle.json")
 
+def _tdx_daily_enabled():
+    return os.environ.get("EASY_STOCK_TDX_DAILY_ENABLED") == "1"
+
 def bulk_allowed(source):
     """批量拉取前检查冷却,True=可跑并打标,False=未冷却"""
+    if source == "eastmoney_bulk" and _tdx_daily_enabled():
+        return True
     try:
         d = json.load(open(THROTTLE_FILE))
     except Exception:
@@ -119,7 +124,7 @@ def _latest_expected_session_cn():
     from trading_calendar import is_trading_day, prev_trading_day, today_str
     local_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
     expected = today_str("CN")
-    if local_now.strftime("%H:%M") < "15:40" or not is_trading_day(expected, "CN"):
+    if local_now.strftime("%H:%M") < "16:10" or not is_trading_day(expected, "CN"):
         expected = prev_trading_day(expected, market="CN")
     return expected
 
@@ -228,7 +233,7 @@ def _fetch_history(codes):
         except Exception as e:
             c.rollback()
             print("batch %d FAIL %s" % (i, str(e)[:500]), flush=True)
-        time.sleep(3)  # 降频,不密集
+        time.sleep(0.1 if _tdx_daily_enabled() else 3)  # 本机 TDX API 批次不触发上游限流
     c.close()
     return total
 
@@ -351,8 +356,8 @@ def append_today():
     from zoneinfo import ZoneInfo
     _now_sh = datetime.datetime.now(ZoneInfo("Asia/Shanghai"))
     now = _now_sh.strftime("%H:%M")
-    if now < "15:40":
-        print("too early (%s), wait until 15:40 for final bars" % now)
+    if now < "16:20":
+        print("too early (%s), wait until 16:20 for shared TDX final bars" % now)
         return
     today = _now_sh.date().isoformat()
     c = db()
@@ -370,6 +375,17 @@ def append_today():
         unresolved = [x for x in uni if _history_needs_repair(c, x, today)]
         print(today, "all tracked symbols have valid daily bars; unresolved history=%d" % len(unresolved))
         c.close()
+        return len(unresolved)
+    if _tdx_daily_enabled():
+        c.close()
+        print("using shared Instock TDX daily files through local API; external Sina fallback disabled", flush=True)
+        _fetch_history(todo)
+        c = db()
+        unresolved = [x for x in uni if _history_needs_repair(c, x, today)]
+        c.close()
+        print(today, "TDX append unresolved=%d/%d" % (len(unresolved), len(uni)), flush=True)
+        if unresolved:
+            print("TDX files do not contain completed daily bars for: %s" % ",".join(unresolved), flush=True)
         return len(unresolved)
     snap = sina_snapshot(todo, force_refresh=True)
     n = 0

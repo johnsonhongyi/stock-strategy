@@ -128,6 +128,7 @@ type Config struct {
 	StockResearchStore   *stockanalysis.ResearchStore
 	MarketEmotionDBPath  string
 	MarketDataDBPath     string
+	TDXDailyDirectory    string
 	ThemeRadarDBPath     string
 	DuanxianxiaBaseURL   string
 	WeChatAPIURL         string
@@ -138,6 +139,8 @@ type Config struct {
 	MarketDataStore      *marketbars.Store
 	ReviewImporter       ReviewImporter
 	SettingsPath         string
+	LinkageDBPath        string
+	LinkageTargetsPath   string
 	SettingsStore        *appsettings.Store
 	ReviewAutomation     *review.Automation
 	RemoteDailyReviewURL string

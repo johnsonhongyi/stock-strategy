@@ -13,12 +13,18 @@ import (
 )
 
 type tdxFirstKLineProvider struct {
-	tdx      *tdx.Client
-	fallback KLineProvider
+	tdx               *tdx.Client
+	fallback          KLineProvider
+	preferLocalDaily  bool
 }
 
 func (p *tdxFirstKLineProvider) KLine(ctx context.Context, symbol, period string, limit int) ([]foundation.KLine, error) {
 	market := strings.ToUpper(marketbars.MarketFromContext(ctx))
+	_, inferredMarket := marketbars.NormalizeSymbol(symbol, market)
+	if inferredMarket != "" && inferredMarket != "AUTO" { market = inferredMarket }
+	if p.preferLocalDaily && market == "CN" && normalizeKLineAggregationPeriod(period) != "" {
+		return p.fallback.KLine(ctx, symbol, period, limit)
+	}
 	if market != "" && market != "CN" {
 		return p.fallback.KLine(ctx, symbol, period, limit)
 	}

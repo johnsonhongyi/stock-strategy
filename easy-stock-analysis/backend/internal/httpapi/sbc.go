@@ -46,5 +46,9 @@ func (s *Server) sbcAnalysis(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": result})
+	if !json.Valid(result) {
+		writeError(w, http.StatusInternalServerError, "SBC analysis returned invalid JSON")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]json.RawMessage{"data": result})
 }

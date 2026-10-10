@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"easy-stock/backend/internal/foundation"
@@ -17,7 +18,12 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db                  *sql.DB
+	tdxDir              string
+	tdxSummaryMu        sync.Mutex
+	tdxSummaryCheckedAt time.Time
+	tdxSummaryExpected  string
+	tdxSummary          TDXDailyCoverage
 }
 
 type DailyMarketSummary struct {
@@ -162,6 +168,16 @@ func (s *Store) ReadDaily(ctx context.Context, symbol string, requestedMarket st
 	}
 	if limit <= 0 {
 		limit = 120
+	}
+	if market == "CN" && s.TDXDailyEnabled() {
+		return s.readTDXDaily(ctx, code, limit)
+	}
+	if market == "CN" {
+		if lines, found, err := s.readTDXDaily(ctx, code, limit); err != nil {
+			return nil, false, err
+		} else if found {
+			return lines, true, nil
+		}
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT bars.date,bars.open,bars.high,bars.low,bars.close,
 		COALESCE(bars.prev_close,(SELECT prior.close FROM daily_bars prior

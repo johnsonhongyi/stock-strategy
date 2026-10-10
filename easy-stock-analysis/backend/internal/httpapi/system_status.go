@@ -75,8 +75,14 @@ type marketDataFreshness struct {
 	Rows         int64  `json:"rows"`
 	LatestDate   string `json:"latest_date,omitempty"`
 	ExpectedDate string `json:"expected_date,omitempty"`
-	InvalidRows  int64  `json:"invalid_rows"`
-	State        string `json:"state"`
+	InvalidRows   int64  `json:"invalid_rows"`
+	Source        string `json:"source,omitempty"`
+	TDXCodes      int64  `json:"tdx_codes,omitempty"`
+	TDXFresh      int64  `json:"tdx_fresh_codes,omitempty"`
+	TDXStale      int64  `json:"tdx_stale_codes,omitempty"`
+	TDXInvalid    int64  `json:"tdx_invalid_codes,omitempty"`
+	CoverageBasis string `json:"coverage_basis,omitempty"`
+	State         string `json:"state"`
 	Error        string `json:"error,omitempty"`
 }
 
@@ -164,7 +170,31 @@ func (s *Server) marketDataFreshness(ctx context.Context, now time.Time) ([]mark
 			status.Error = runtimelog.Redact(calendarErr.Error())
 		} else {
 			status.ExpectedDate = expected
-			if item.InvalidRows > 0 {
+			if market == "CN" && s.marketBars.TDXDailyEnabled() {
+				coverage, coverageErr := s.marketBars.TDXDailyCoverage(ctx, expected)
+				status.Source = "instock-tdx-readonly"
+				status.CoverageBasis = "现有 TDX 文件；未与交易所全量有效证券清单核对"
+				if coverageErr != nil {
+					status.State = "TDX 底座不可用"
+					status.Error = runtimelog.Redact(coverageErr.Error())
+				} else {
+					status.TDXCodes = coverage.Codes
+					status.TDXFresh = coverage.FreshCodes
+					status.TDXStale = coverage.StaleCodes
+					status.TDXInvalid = coverage.InvalidCodes
+					if coverage.LatestDate != "" { status.LatestDate = coverage.LatestDate }
+					switch {
+					case coverage.Codes == 0:
+						status.State = "TDX 文件缺失"
+					case coverage.InvalidCodes > 0:
+						status.State = "TDX 文件存在异常"
+					case coverage.FreshCodes == coverage.Codes:
+						status.State = "现有 TDX 文件日期新鲜"
+					default:
+						status.State = "部分 TDX 文件待回补"
+					}
+				}
+			} else if item.InvalidRows > 0 {
 				status.State = "异常数据"
 			} else if item.Rows > 0 && item.LatestDate >= expected {
 				status.State = "新鲜"
@@ -207,7 +237,8 @@ func loadMarketAppendStatuses(now time.Time) ([]scheduledJobStatus, string) {
 func parseMarketAppendSchedules(content string) []marketAppendSchedule {
 	timezone := "Asia/Hong_Kong"
 	labels := map[string]struct{ name, market string }{
-		"cn":     {name: "A 股盘后行情回补", market: "A 股"},
+		"cn":       {name: "A 股盘后行情回补", market: "A 股"},
+		"cn-retry": {name: "A 股日线缺口重试", market: "A 股"},
 		"us":     {name: "美股行情回补", market: "美股"},
 		"crypto": {name: "币圈日线回补", market: "币圈"},
 	}

@@ -32,3 +32,14 @@ func (s *Server) authorized(r *http.Request) bool {
 	}
 	return false
 }
+
+func (s *Server) authorizedLinkage(r *http.Request) bool {
+	if s == nil || strings.TrimSpace(s.token) == "" {
+		return false
+	}
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == s.token {
+		return true
+	}
+	return r.Header.Get("X-A-Stock-Token") == s.token
+}

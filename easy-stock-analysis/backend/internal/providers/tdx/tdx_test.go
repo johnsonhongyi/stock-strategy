@@ -83,6 +83,18 @@ func TestCacheRoundTripAndSymbolValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestNormalizeBeijingSymbols(t *testing.T) {
+	for _, input := range []string{"920305", "920305.BJ", "BJ920305"} {
+		code, symbol, market, err := normalize(input)
+		if err != nil || code != "920305" || symbol != "920305.BJ" || market != 2 {
+			t.Fatalf("normalize(%q) = %q, %q, %d, %v", input, code, symbol, market, err)
+		}
+	}
+	if _, _, _, err := normalize("920305.SH"); err == nil {
+		t.Fatal("accepted a Beijing symbol on Shanghai market")
+	}
+}
+
 func TestLiveTDX(t *testing.T) {
 	if os.Getenv("TDX_SMOKE") != "1" {
 		t.Skip("explicit network smoke only")

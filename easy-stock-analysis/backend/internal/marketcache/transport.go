@@ -26,12 +26,17 @@ type replayBody struct {
 }
 
 func (t *cacheTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	provider := ""
+	if req != nil && req.URL != nil {
+		provider = providerKey(req.URL.Hostname())
+	}
+	scope := providerRequestScope(req, provider)
 	if !cacheableRequest(req) {
-		return t.next.RoundTrip(req)
+		return t.roundTripUncached(req, provider, scope)
 	}
 	key := cacheKey(req)
 	if key == "" {
-		return t.next.RoundTrip(req)
+		return t.roundTripUncached(req, provider, scope)
 	}
 	forceRefresh := RefreshRequested(req.Header) || RefreshFromContext(req.Context())
 	cached, err := t.cache.get(req.Context(), key)
@@ -42,6 +47,23 @@ func (t *cacheTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if !forceRefresh && cached != nil && now.Before(cached.expiresAt) {
 		return cached.response(req, "HIT"), nil
 	}
+	if provider != "" {
+		blockedUntil, blockErr := t.cache.acquireProviderRequest(req.Context(), provider, scope)
+		if blockErr != nil {
+			log.Printf("market provider cooldown read failed provider=%s: %v", provider, blockErr)
+			if !forceRefresh && usableStale(req, cached, now) {
+				return cached.response(req, "STALE"), nil
+			}
+			return nil, fmt.Errorf("market provider cooldown state unavailable: %w", blockErr)
+		}
+		if blockedUntil.After(now) {
+			if !forceRefresh && usableStale(req, cached, now) {
+				log.Printf("market provider cooldown stale fallback provider=%s age=%s", provider, now.Sub(cached.fetchedAt).Round(time.Second))
+				return cached.response(req, "STALE"), nil
+			}
+			return cooldownResponse(req, blockedUntil), nil
+		}
+	}
 
 	resp, err := t.next.RoundTrip(req)
 	if err != nil {
@@ -51,7 +73,17 @@ func (t *cacheTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		return nil, err
 	}
-	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+	if provider != "" {
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden {
+			t.cache.recordProviderLimit(req.Context(), provider, resp.StatusCode, resp.Header.Get("Retry-After"))
+		} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			t.cache.clearProviderLimit(req.Context(), provider)
+			if scope != provider {
+				t.cache.recordProviderSuccess(req.Context(), scope)
+			}
+		}
+	}
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden || resp.StatusCode >= http.StatusInternalServerError {
 		if !forceRefresh && usableStale(req, cached, now) {
 			_ = resp.Body.Close()
 			log.Printf("market cache stale fallback host=%s status=%d", req.URL.Hostname(), resp.StatusCode)
@@ -67,6 +99,31 @@ func (t *cacheTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.bufferAndStore(req, resp, key, now)
 }
 
+func (t *cacheTransport) roundTripUncached(req *http.Request, provider, scope string) (*http.Response, error) {
+	if provider != "" {
+		blockedUntil, err := t.cache.acquireProviderRequest(req.Context(), provider, scope)
+		if err != nil {
+			return nil, fmt.Errorf("market provider cooldown state unavailable: %w", err)
+		}
+		if blockedUntil.After(time.Now()) {
+			return cooldownResponse(req, blockedUntil), nil
+		}
+	}
+	resp, err := t.next.RoundTrip(req)
+	if err != nil || resp == nil || provider == "" {
+		return resp, err
+	}
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden {
+		t.cache.recordProviderLimit(req.Context(), provider, resp.StatusCode, resp.Header.Get("Retry-After"))
+	} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		t.cache.clearProviderLimit(req.Context(), provider)
+		if scope != provider {
+			t.cache.recordProviderSuccess(req.Context(), scope)
+		}
+	}
+	return resp, nil
+}
+
 func (t *cacheTransport) bufferAndStore(req *http.Request, resp *http.Response, key string, now time.Time) (*http.Response, error) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxCachedBodyBytes+1))
 	if err != nil || len(body) > maxCachedBodyBytes {
@@ -77,6 +134,7 @@ func (t *cacheTransport) bufferAndStore(req *http.Request, resp *http.Response, 
 	_ = resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	resp.ContentLength = int64(len(body))
+	resp.Header.Set("X-Stock-Fetched-At", now.UTC().Format(time.RFC3339Nano))
 	entry := &entry{
 		statusCode: resp.StatusCode,
 		header:     resp.Header.Clone(),
@@ -221,13 +279,20 @@ func cacheTTL(req *http.Request) time.Duration {
 	if strings.Contains(path, "limit_up_pool") && query.Get("date") != "" {
 		return 30 * 24 * time.Hour
 	}
-	if strings.Contains(host, "10jqka.com.cn") || strings.Contains(path, "stockrank") {
-		return 30 * time.Second
+	if isHeatOrSectorRequest(req) {
+		return 30 * time.Minute
 	}
 	if strings.Contains(path, "news") || strings.Contains(path, "telegraph") {
 		return 2 * time.Minute
 	}
 	return 5 * time.Minute
+}
+
+func isHeatOrSectorPath(path string) bool {
+	for _, keyword := range []string{"hot", "rank", "theme", "sector", "concept", "board", "surge"} {
+		if strings.Contains(path, keyword) { return true }
+	}
+	return false
 }
 
 func usableStale(req *http.Request, cached *entry, now time.Time) bool {

@@ -85,6 +85,14 @@ func main() {
 	if settingsPath == "" {
 		settingsPath = dataPath(dataDir, "settings.json")
 	}
+	linkageDBPath := strings.TrimSpace(os.Getenv("A_STOCK_LINKAGE_DB"))
+	if linkageDBPath == "" {
+		linkageDBPath = filepath.Join(filepath.Dir(sharedDBPath), "linkage-operations.db")
+	}
+	linkageTargetsPath := strings.TrimSpace(os.Getenv("A_STOCK_LINKAGE_TARGETS"))
+	if linkageTargetsPath == "" {
+		linkageTargetsPath = filepath.Join(filepath.Dir(sharedDBPath), "linkage-targets.json")
+	}
 	if masteryCacheDir == "" {
 		masteryCacheDir = dataPath(dataDir, "trading-mastery")
 	}
@@ -137,12 +145,15 @@ func main() {
 		RemoteDailyReviewURL: os.Getenv("A_STOCK_DAILY_REVIEW_BASE_URL"),
 		MarketEmotionDBPath:  sharedDBPath,
 		MarketDataDBPath:     sharedDBPath,
+		TDXDailyDirectory:    strings.TrimSpace(os.Getenv("A_STOCK_TDX_FORWARDP_DIR")),
 		MarketCacheTransport: marketCache.RoundTripper(network.Transport()),
 		MarketNetwork:        network,
 		ThemeRadarDBPath:     sharedDBPath,
 		DuanxianxiaBaseURL:   os.Getenv("A_STOCK_DUANXIANXIA_BASE_URL"),
 		WeChatAPIURL:         os.Getenv("A_STOCK_WECHAT_API_URL"),
 		SettingsPath:         settingsPath,
+		LinkageDBPath:        linkageDBPath,
+		LinkageTargetsPath:   linkageTargetsPath,
 		HermesGateway:        hermesGateway,
 		MasteryLibrary:       masteryLibrary,
 		Logger:               log.Default(),

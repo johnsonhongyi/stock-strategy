@@ -56,15 +56,21 @@ func normalize(symbol string) (string, string, int, error) {
 	case strings.HasSuffix(s, ".SZ"):
 		market = 0
 		s = strings.TrimSuffix(s, ".SZ")
+	case strings.HasSuffix(s, ".BJ"):
+		market = 2
+		s = strings.TrimSuffix(s, ".BJ")
 	case strings.HasPrefix(s, "SH"):
 		market = 1
 		s = s[2:]
 	case strings.HasPrefix(s, "SZ"):
 		market = 0
 		s = s[2:]
+	case strings.HasPrefix(s, "BJ"):
+		market = 2
+		s = s[2:]
 	}
 	if len(s) != 6 {
-		return "", "", 0, fmt.Errorf("TDX supports SH/SZ A shares only")
+		return "", "", 0, fmt.Errorf("TDX supports SH/SZ/BJ A shares only")
 	}
 	for _, v := range s {
 		if v < '0' || v > '9' {
@@ -76,16 +82,28 @@ func normalize(symbol string) (string, string, int, error) {
 			market = 1
 		} else if s[0] == '0' || s[0] == '3' {
 			market = 0
+		} else if strings.HasPrefix(s, "92") || strings.HasPrefix(s, "89") ||
+			strings.HasPrefix(s, "88") || strings.HasPrefix(s, "87") ||
+			strings.HasPrefix(s, "83") || strings.HasPrefix(s, "82") ||
+			strings.HasPrefix(s, "43") {
+			market = 2
 		} else {
 			return "", "", 0, fmt.Errorf("unsupported TDX market")
 		}
 	}
-	if (market == 1 && s[0] != '6') || (market == 0 && s[0] != '0' && s[0] != '3') {
+	beijing := strings.HasPrefix(s, "92") || strings.HasPrefix(s, "89") ||
+		strings.HasPrefix(s, "88") || strings.HasPrefix(s, "87") ||
+		strings.HasPrefix(s, "83") || strings.HasPrefix(s, "82") ||
+		strings.HasPrefix(s, "43")
+	if (market == 1 && s[0] != '6') || (market == 0 && s[0] != '0' && s[0] != '3') ||
+		(market == 2 && !beijing) {
 		return "", "", 0, fmt.Errorf("TDX A-share market mismatch")
 	}
 	suffix := ".SZ"
 	if market == 1 {
 		suffix = ".SH"
+	} else if market == 2 {
+		suffix = ".BJ"
 	}
 	return s, s + suffix, market, nil
 }
@@ -111,8 +129,13 @@ func (c *Client) KLine(ctx context.Context, symbol, period string, limit int) ([
 	if period == "day" || period == "week" || period == "month" {
 		ttl = 5 * time.Minute
 	}
-	if readErr == nil && len(cached) >= limit && now.Sub(stamp) < ttl && !marketcache.RefreshFromContext(ctx) {
-		return markFreshness(cached, now), nil
+	if readErr == nil && now.Sub(stamp) < ttl && !marketcache.RefreshFromContext(ctx) {
+		if len(cached) == 0 {
+			return []foundation.KLine{}, nil
+		}
+		if len(cached) >= limit {
+			return markFreshness(cached, now), nil
+		}
 	}
 	c.mu.Lock()
 	retry, preferred := c.retryAt, c.preferred
@@ -150,24 +173,36 @@ func (c *Client) KLine(ctx context.Context, symbol, period string, limit int) ([
 		}
 		idx := (preferred + i) % len(c.hosts)
 		result, last = c.fetch(ctx, c.hosts[idx], code, symbol, market, cat, limit)
-		if last == nil && len(result) > 0 {
+		if last == nil {
 			c.mu.Lock()
 			c.preferred = idx
 			c.retryAt = time.Time{}
 			c.mu.Unlock()
-			break
+			if len(result) > 0 {
+				break
+			}
 		}
 	}
-	if last != nil || len(result) == 0 {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if last != nil {
 		c.mu.Lock()
-		if ctx.Err() == nil {
-			c.retryAt = time.Now().Add(time.Minute)
-		}
+		c.retryAt = time.Now().Add(time.Minute)
 		c.mu.Unlock()
 		if len(cached) > 0 {
 			return stale(cached, fmt.Sprint(last)), nil
 		}
 		return nil, fmt.Errorf("TDX unavailable: %v", last)
+	}
+	if len(result) == 0 {
+		if len(cached) > 0 {
+			return stale(cached, "TDX server returned no bars"), nil
+		}
+		if err = c.cache.write(ctx, symbol, period, result, time.Now()); err != nil {
+			return nil, fmt.Errorf("persist empty TDX result: %w", err)
+		}
+		return []foundation.KLine{}, nil
 	}
 	result = markFreshness(result, time.Now())
 	if err = c.cache.write(ctx, symbol, period, result, time.Now()); err != nil {
