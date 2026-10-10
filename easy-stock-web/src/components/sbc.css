@@ -31,7 +31,7 @@
 
 .kline-details-slot { min-height: 185px; }
 
-/* ATS/SBC chart colors remain fixed independently of the application theme. */
+/* SBC defaults to the ATS dark palette independently of the application theme. */
 .kline-chart-wrap { background:#0b0c14; color:#e2e8f0; border:1px solid #252536; border-radius:6px; }
 .kline-chart-wrap .kline-grid { stroke:#202030; }
 .kline-chart-wrap .kline-zero-grid { stroke:#8899bb; }
@@ -52,3 +52,70 @@
 .kline-chart-wrap .kline-details .up { color:#ff4444; }
 .kline-chart-wrap .kline-details .down { color:#00ff88; }
 .kline-chart-wrap button { background:#181824; border-color:#353548; color:#cbd5e1; }
+
+/* Opt-in light palette, shared by inline and enlarged SBC charts. */
+.kline-chart-wrap[data-sbc-theme="light"] { background:#fff; color:#172033; border-color:#d7e0ec; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-grid { stroke:#e2e8f0; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-zero-grid { stroke:#64748b; }
+.kline-chart-wrap[data-sbc-theme="light"] :is(.kline-axis-label,.kline-percent-axis-label,.kline-date-label) { fill:#52647c; }
+.kline-chart-wrap[data-sbc-theme="light"] :is(.sbc-toolbar,.sbc-toolbar strong,.sbc-summary,.kline-chart-legend,.kline-viewport-tools) { color:#475569; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-up :is(.kline-wick,.kline-body) { stroke:#dc2626; fill:#dc2626; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-down :is(.kline-wick,.kline-body) { stroke:#087f8c; fill:#fff; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-up .kline-volume { fill:#dc2626; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-down .kline-volume { fill:#087f8c; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-close-line { stroke:#007e9c; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-average-line { stroke:#986500; }
+.kline-chart-wrap[data-sbc-theme="light"] .close-dot { background:#007e9c; }
+.kline-chart-wrap[data-sbc-theme="light"] .average-dot { background:#986500; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-divider { stroke:#d7e0ec; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-details { background:#f8fafc; border-color:#d7e0ec; color:#172033; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-details :is(strong,span) { color:#475569; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-details .up { color:#dc2626; }
+.kline-chart-wrap[data-sbc-theme="light"] .kline-details .down { color:#087f5b; }
+.kline-chart-wrap[data-sbc-theme="light"] button { background:#f8fafc; border-color:#cbd5e1; color:#334155; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ffffff"] { stroke:#334155; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ffffff"] { fill:#334155; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#c0c0d0"] { stroke:#64748b; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#c0c0d0"] { fill:#64748b; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ffd700"] { stroke:#986500; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ffd700"] { fill:#986500; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ffcc00"] { stroke:#986500; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ffcc00"] { fill:#986500; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#00ffff"] { stroke:#007e9c; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#00ffff"] { fill:#007e9c; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#00e5ff"] { stroke:#007e9c; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#00e5ff"] { fill:#007e9c; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#00ff88"] { stroke:#087f5b; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#00ff88"] { fill:#087f5b; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ff00ff"] { stroke:#a21caf; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ff00ff"] { fill:#a21caf; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#9debff"] { stroke:#007e9c; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#9debff"] { fill:#007e9c; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#f06ad7"] { stroke:#a21caf; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#f06ad7"] { fill:#a21caf; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ff4444"] { stroke:#dc2626; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ff4444"] { fill:#dc2626; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ff7777"] { stroke:#b91c1c; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ff7777"] { fill:#b91c1c; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ff77aa"] { stroke:#be185d; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ff77aa"] { fill:#be185d; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ff66aa"] { stroke:#be185d; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ff66aa"] { fill:#be185d; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ff007f"] { stroke:#be185d; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ff007f"] { fill:#be185d; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ffaa00"] { stroke:#a65a00; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ffaa00"] { fill:#a65a00; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ffb454"] { stroke:#a65a00; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ffb454"] { fill:#a65a00; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ffdd66"] { stroke:#854d0e; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ffdd66"] { fill:#854d0e; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#ff7700"] { stroke:#c2410c; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#ff7700"] { fill:#c2410c; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#003325"] { stroke:#e6f7ef; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#003325"] { fill:#e6f7ef; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#450018"] { stroke:#fff1f2; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#450018"] { fill:#fff1f2; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#2a0015"] { stroke:#fff1f7; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#2a0015"] { fill:#fff1f7; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#2a1e00"] { stroke:#fff8dc; }
+.kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#2a1e00"] { fill:#fff8dc; }
