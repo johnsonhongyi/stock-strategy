@@ -622,3 +622,20 @@ func verifySignature(t *testing.T, request *http.Request, body, key []byte) {
 		t.Errorf("signature = %q, want %q", got, want)
 	}
 }
+
+func TestSavedOperationReconciliationOutlivesCommandTTL(t *testing.T) {
+	expired := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	if consumerRetryAt(expired) <= time.Now().Unix() {
+		t.Fatal("saved-operation reconciliation stopped at command expiry")
+	}
+	for _, quote := range []string{"pending_fetch", "unknown", "quota_limited", "stale"} {
+		raw := []byte(fmt.Sprintf(`{"result":{"consumers":{"TK":{"status":"synced","quote_status":%q},"ATS":{"status":"synced","quote_status":"market_closed"}}}}`, quote))
+		if !consumerReconciliationNeeded(raw) {
+			t.Fatalf("quote %s stopped reconciliation", quote)
+		}
+	}
+	raw := []byte(`{"result":{"consumers":{"TK":{"status":"synced","quote_status":"ready"},"ATS":{"status":"synced","quote_status":"market_closed"}}}}`)
+	if consumerReconciliationNeeded(raw) {
+		t.Fatal("settled consumers need immediate reconciliation")
+	}
+}

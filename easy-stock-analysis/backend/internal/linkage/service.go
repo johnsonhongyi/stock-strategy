@@ -765,7 +765,8 @@ func consumerRetryAt(expiresAt string) int64 {
 	}
 	next := time.Now().Add(deliveryPollInterval)
 	if !expires.After(next) {
-		return 0
+		// Command expiry forbids a new effect, not reconciliation of a saved one.
+		return time.Now().Add(30 * time.Second).Unix()
 	}
 	return next.Unix()
 }
@@ -774,7 +775,8 @@ func consumerReconciliationNeeded(raw []byte) bool {
 	var response struct {
 		Result struct {
 			Consumers map[string]struct {
-				Status string `json:"status"`
+				Status      string `json:"status"`
+				QuoteStatus string `json:"quote_status"`
 			} `json:"consumers"`
 		} `json:"result"`
 	}
@@ -783,7 +785,8 @@ func consumerReconciliationNeeded(raw []byte) bool {
 	}
 	for _, consumer := range []string{"TK", "ATS"} {
 		status, ok := response.Result.Consumers[consumer]
-		if !ok || (status.Status != "synced" && status.Status != "error") {
+		if !ok || (status.Status != "synced" && status.Status != "error") ||
+			(status.Status == "synced" && status.QuoteStatus != "ready" && status.QuoteStatus != "market_closed") {
 			return true
 		}
 	}

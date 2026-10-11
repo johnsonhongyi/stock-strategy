@@ -1,3 +1,4 @@
+import { linkageOperationRefreshDelay } from "../lib/linkage";
 import { useEffect, useMemo, useState } from 'react';
 import { BackendRequestError, type BackendConfig } from '../lib/backend';
 import {
@@ -157,13 +158,12 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 		let timer: number | undefined;
 		let delay = 2000;
 		const poll = async () => {
-			let settled = false;
 			try {
 				const current = await getLinkageOperation(config, command.operation_id);
-				if (active) { setOperation(current); settled = isSettled(current); }
-				delay = 2000;
-			} catch { delay = Math.min(delay * 2, 30_000); }
-			if (active && !settled) timer = window.setTimeout(() => { void poll(); }, delay);
+				if (active) setOperation(current);
+				delay = linkageOperationRefreshDelay(current);
+			} catch { delay = Math.min(Math.max(delay, 2000) * 2, 30_000); }
+			if (active && delay > 0) timer = window.setTimeout(() => { void poll(); }, delay);
 		};
 		void poll();
 		return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };

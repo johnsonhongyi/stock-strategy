@@ -58,6 +58,24 @@ export type LinkageOperation = {
 	}>;
 };
 
+// Keep applied commands observable after the execution TTL: a consumer can start later.
+export function linkageOperationRefreshDelay(operation: LinkageOperation): number {
+    if (!operation.deliveries.length) return 2000;
+    const failed = (status: string | undefined) => ['rejected', 'expired', 'failed'].includes(status || '');
+    const active = operation.deliveries.filter(d => !failed(d.status) && !failed(d.result?.status));
+    if (!active.length) return 0;
+    for (const delivery of active) {
+        const receipt = delivery.result?.result;
+        if (!receipt?.saved?.persisted) return 2000;
+        for (const name of ['TK', 'ATS']) {
+            const consumer = receipt.consumers?.[name];
+            if (!consumer || consumer.status === 'pending') return 2000;
+            if (consumer.status === 'synced' && !['ready', 'market_closed'].includes(consumer.quote_status || '')) return 5000;
+        }
+    }
+    return 30000;
+}
+
 export type LinkageContextSnapshot = {
 	schema_version: number;
 	snapshot_id: string;

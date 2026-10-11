@@ -1,3 +1,4 @@
+import { linkageOperationRefreshDelay, type LinkageOperation } from "./linkage";
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	canReplayWatchlistAddCommand, createLinkageAttentionIntent, createWatchlistAddCommand,
@@ -114,4 +115,25 @@ describe('SBC desktop watchlist command contract', () => {
 		expect(isLinkageAttentionIntentSatisfied(snapshot, '600000.SH', SBC_WATCHLIST_SOURCE, 'remove_source')).toBe(true);
 		expect(isLinkageAttentionIntentSatisfied(snapshot, '600000.SH', 'manual', 'remove_all')).toBe(false);
 	});
+});
+
+
+describe('watchlist receipt lifecycle', () => {
+    const operation = (status: string, tk = 'synced', quote = 'market_closed'): LinkageOperation => ({
+        operation_id: 'op', request_id: 'req', status,
+        deliveries: [{ node_id: 'tk', workspace_id: 'ws', status, result: { status, result: {
+            saved: { persisted: true }, consumers: {
+                TK: { status: tk, quote_status: quote }, ATS: { status: 'synced', quote_status: 'market_closed' },
+            },
+        } } }],
+    });
+    it('keeps polling saved commands when a consumer starts late or quotes are pending', () => {
+        expect(linkageOperationRefreshDelay(operation('applied', 'not_running'))).toBe(30000);
+        expect(linkageOperationRefreshDelay(operation('already_present', 'synced', 'pending_fetch'))).toBe(5000);
+        expect(linkageOperationRefreshDelay(operation('applied', 'pending'))).toBe(2000);
+    });
+    it('continues low-rate refresh after successful consumption and stops rejected commands', () => {
+        expect(linkageOperationRefreshDelay(operation('applied'))).toBe(30000);
+        expect(linkageOperationRefreshDelay(operation('rejected'))).toBe(0);
+    });
 });
