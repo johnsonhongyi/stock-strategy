@@ -1,8 +1,14 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,7 +70,7 @@ func TestLinkageOptionsRequestSupportsCORSPreflight(t *testing.T) {
 	}
 }
 
-func TestLinkageSetupImportRequiresConfiguredBearerToken(t *testing.T) {
+func TestLinkageSetupImportRequiresConfiguredToken(t *testing.T) {
 	server := NewServer(Config{Token: "test-token"})
 	defer server.Close()
 
@@ -73,6 +79,21 @@ func TestLinkageSetupImportRequiresConfiguredBearerToken(t *testing.T) {
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated setup import status = %d", unauthorized.Code)
 	}
+	wrongToken := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/targets/import", strings.NewReader(`{}`))
+	wrongToken.Header.Set("Authorization", "Bearer wrong-token")
+	wrongTokenResponse := httptest.NewRecorder()
+	server.ServeHTTP(wrongTokenResponse, wrongToken)
+	if wrongTokenResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong setup token status = %d", wrongTokenResponse.Code)
+	}
+	wrongHeaderToken := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/targets/import", strings.NewReader(`{}`))
+	wrongHeaderToken.Header.Set("X-A-Stock-Token", "wrong-token")
+	wrongHeaderResponse := httptest.NewRecorder()
+	server.ServeHTTP(wrongHeaderResponse, wrongHeaderToken)
+	if wrongHeaderResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong X-A-Stock-Token status = %d", wrongHeaderResponse.Code)
+	}
+
 	queryToken := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/targets/import?token=test-token", strings.NewReader(`{}`))
 	queryTokenResponse := httptest.NewRecorder()
 	server.ServeHTTP(queryTokenResponse, queryToken)
@@ -86,6 +107,101 @@ func TestLinkageSetupImportRequiresConfiguredBearerToken(t *testing.T) {
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("authenticated setup import without linkage service = %d: %s", response.Code, response.Body.String())
+	}
+	xTokenRequest := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/targets/import", strings.NewReader(`{}`))
+	xTokenRequest.Header.Set("X-A-Stock-Token", "test-token")
+	xTokenResponse := httptest.NewRecorder()
+	server.ServeHTTP(xTokenResponse, xTokenRequest)
+	if xTokenResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("authenticated X-A-Stock-Token import without linkage service = %d: %s", xTokenResponse.Code, xTokenResponse.Body.String())
+	}
+}
+
+func TestLinkageSetupImportWithoutTokenCompletesTKHandshake(t *testing.T) {
+	key := []byte(strings.Repeat("k", 32))
+	tk := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setupBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read TK setup body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(setupBody, &payload); err != nil || payload["schema_version"] != float64(1) || payload["stock_strategy_base_url"] != "http://192.168.31.5:20081" {
+			t.Errorf("unexpected TK configure payload: %s", string(setupBody))
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		timestamp := r.Header.Get("X-Linkage-Timestamp")
+		nodeID := r.Header.Get("X-Linkage-Node-ID")
+		workspaceID := r.Header.Get("X-Linkage-Workspace-ID")
+		nonce := r.Header.Get("X-Linkage-Nonce")
+		if r.Method != http.MethodPost || r.URL.RequestURI() != "/bridge/v1/configure" {
+			t.Errorf("TK callback = %s %s", r.Method, r.URL.RequestURI())
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		bodyHash := sha256.Sum256(setupBody)
+		canonical := strings.Join([]string{r.Method, r.URL.RequestURI(), hex.EncodeToString(bodyHash[:]), timestamp, nonce, nodeID, workspaceID}, "\n")
+		mac := hmac.New(sha256.New, key)
+		_, _ = mac.Write([]byte(canonical))
+		if nodeID != "tk-test" || workspaceID != "ws-test" || len(nonce) < 16 || !hmac.Equal([]byte(r.Header.Get("X-Linkage-Signature")), []byte(hex.EncodeToString(mac.Sum(nil)))) {
+			t.Errorf("TK rejected Go HMAC headers: node=%q workspace=%q", nodeID, workspaceID)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"status":"configured","node_id":"tk-test","workspace_id":"ws-test","connection_test":"hmac_verified"}`)
+	}))
+	defer tk.Close()
+	port := tk.Listener.Addr().(*net.TCPAddr).Port
+	server := NewServer(Config{LinkageDBPath: filepath.Join(t.TempDir(), "linkage.db")})
+	defer server.Close()
+	setup := map[string]any{
+		"schema_version": 1, "kind": "stock-standalone.system-linkage",
+		"node_id": "tk-test", "workspace_id": "ws-test", "label": "TK test",
+		"address": "127.0.0.1", "port": port, "hmac_key": hex.EncodeToString(key),
+		"backend_base_url": "http://192.168.31.5:20081",
+	}
+	body, err := json.Marshal(setup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/targets/import", bytes.NewReader(body))
+	req.RemoteAddr = "192.168.50.184:12345"
+	req.Host = "192.168.50.60:20073"
+	req.Header.Set("Origin", "http://192.168.50.60:20073")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var result linkage.SetupResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.TargetRegistered || result.DesktopStatus != "connected" || result.DesktopError != "" {
+		t.Fatalf("setup result = %+v", result)
+	}
+	for _, path := range []string{"/api/v1/linkage/targets", "/api/v1/linkage/context", "/api/v1/linkage/events", "/api/v1/linkage/attention?workspace_id=ws-test&node_id=tk-test"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.RemoteAddr = req.RemoteAddr
+		request.Host = req.Host
+		request.Header.Set("Origin", req.Header.Get("Origin"))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("browser read %s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+	// An invalid command must reach validation rather than fail authentication.
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/commands", strings.NewReader(`{}`))
+	request.RemoteAddr, request.Host = req.RemoteAddr, req.Host
+	request.Header.Set("Origin", req.Header.Get("Origin"))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("browser command status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -227,5 +343,46 @@ func TestLinkageContextRouteRequiresBearerWhenTokenConfigured(t *testing.T) {
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "not configured") {
 		t.Fatalf("configured-token response = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestLinkageLANAccessBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, remote, host, origin, realIP string
+		want                               bool
+	}{
+		{"same origin", "192.168.50.184:1234", "192.168.50.60:20073", "http://192.168.50.60:20073", "", true},
+		{"LAN CLI", "192.168.50.184:1234", "192.168.50.60:20073", "", "", true},
+		{"loopback CLI", "127.0.0.1:1234", "127.0.0.1:20081", "", "", true},
+		{"nginx LAN", "172.18.0.3:1234", "192.168.50.60:20073", "http://192.168.50.60:20073", "192.168.50.184", true},
+		{"public client", "203.0.113.1:1234", "192.168.50.60:20073", "", "", false},
+		{"public proxy client", "172.18.0.3:1234", "192.168.50.60:20073", "", "203.0.113.1", false},
+		{"cross origin", "192.168.50.184:1234", "192.168.50.60:20073", "https://untrusted.invalid", "", false},
+		{"wrong port", "192.168.50.184:1234", "192.168.50.60:20073", "http://192.168.50.60:20074", "", false},
+		{"null origin", "192.168.50.184:1234", "192.168.50.60:20073", "null", "", false},
+		{"public host", "192.168.50.184:1234", "untrusted.invalid", "", "", false},
+		{"missing remote", "", "192.168.50.60:20073", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/targets/import", nil)
+			r.RemoteAddr, r.Host = tc.remote, tc.host
+			if tc.origin != "" {
+				r.Header.Set("Origin", tc.origin)
+			}
+			if tc.realIP != "" {
+				r.Header.Set("X-Real-IP", tc.realIP)
+			}
+			server := &Server{}
+			if got := server.authorizedLinkageAdmin(r); got != tc.want {
+				t.Fatalf("admin allowed=%t want=%t", got, tc.want)
+			}
+			if got := server.authorizedLinkage(r); got != tc.want {
+				t.Fatalf("browser allowed=%t want=%t", got, tc.want)
+			}
+			r.Header.Set("X-Linkage-Node-ID", "tk-spoof")
+			if server.authorizedLinkage(r) {
+				t.Fatal("unverified desktop identity bypassed HMAC")
+			}
+		})
 	}
 }

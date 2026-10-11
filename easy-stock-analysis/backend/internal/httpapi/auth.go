@@ -3,7 +3,9 @@ package httpapi
 import (
 	"bytes"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -41,14 +43,16 @@ func (s *Server) authorizedLinkage(r *http.Request) bool {
 	if s == nil {
 		return false
 	}
-	if token := strings.TrimSpace(s.token); token != "" {
-		auth := strings.TrimSpace(r.Header.Get("Authorization"))
-		if strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == token {
-			return true
+	// Desktop identities always require HMAC; browser/CLI requests use the import policy.
+	peer := false
+	for name := range r.Header {
+		if strings.HasPrefix(strings.ToLower(name), "x-linkage-") {
+			peer = true
+			break
 		}
-		if r.Header.Get("X-A-Stock-Token") == token {
-			return true
-		}
+	}
+	if !peer && s.authorizedLinkageAdmin(r) {
+		return true
 	}
 	if s.linkage == nil {
 		return false
@@ -67,11 +71,46 @@ func (s *Server) authorizedLinkage(r *http.Request) bool {
 }
 
 func (s *Server) authorizedLinkageAdmin(r *http.Request) bool {
-	if s == nil || strings.TrimSpace(s.token) == "" {
+	if s == nil {
 		return false
 	}
 	token := strings.TrimSpace(s.token)
+	if token == "" {
+		return linkageLANRequest(r)
+	}
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	return strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == token ||
 		r.Header.Get("X-A-Stock-Token") == token
+}
+
+// Tokenless deployments permit LAN administration, never arbitrary web origins.
+// Nginx preserves the external Host and overwrites X-Real-IP with its client IP.
+func linkageLANRequest(r *http.Request) bool {
+	privateIP := func(raw string) bool {
+		ip := net.ParseIP(raw)
+		return ip != nil && (ip.IsPrivate() || ip.IsLoopback())
+	}
+	remote, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || !privateIP(remote) {
+		return false
+	}
+	if client := r.Header.Get("X-Real-IP"); client != "" && !privateIP(client) {
+		return false
+	}
+	host, err := url.Parse("//" + r.Host)
+	if err != nil || host.User != nil || !privateIP(host.Hostname()) {
+		return false
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		if err != nil || u.User != nil || u.Scheme != scheme || !strings.EqualFold(u.Host, r.Host) ||
+			u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+			return false
+		}
+	}
+	return true
 }
