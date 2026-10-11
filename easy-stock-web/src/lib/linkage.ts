@@ -3,6 +3,24 @@ import { requestJSON, type BackendConfig } from './backend';
 export const SBC_WATCHLIST_SOURCE = 'stock-strategy.sbc' as const;
 
 export type LinkageTarget = { node_id: string; workspace_id: string; label?: string; status: string };
+export type LinkageSetupPackage = {
+	schema_version: 1;
+	kind: 'stock-standalone.system-linkage';
+	node_id: string;
+	workspace_id: string;
+	label: string;
+	address: string;
+	port: number;
+	hmac_key: string;
+};
+
+export type LinkageSetupResult = {
+	node_id: string;
+	workspace_id: string;
+	target_registered: boolean;
+	desktop_status: 'connected' | 'pending';
+	desktop_error?: string;
+};
 export type WatchlistAddCommand = {
 	schema_version: 1;
 	type: 'WATCHLIST_ADD';
@@ -146,6 +164,37 @@ export function canReplayWatchlistAddCommand(command: WatchlistAddCommand, now =
 
 export function listLinkageTargets(config: BackendConfig) {
 	return requestJSON<{ schema_version: number; targets: LinkageTarget[] }>(config, '/api/v1/linkage/targets');
+}
+
+export function parseLinkageSetupPackage(consoleText: string): LinkageSetupPackage {
+	const marker = 'SYSTEM_LINKAGE_SETUP_V1=';
+	const lines = consoleText.split(/\r?\n/).filter((line) => line.includes(marker));
+	if (!lines.length) throw new Error('未找到 TK 联动配置行');
+	const raw = lines[lines.length - 1].slice(lines[lines.length - 1].indexOf(marker) + marker.length).trim();
+	let value: unknown;
+	try { value = JSON.parse(raw); } catch { throw new Error('TK 联动配置行不是有效 JSON'); }
+	if (!value || typeof value !== 'object') throw new Error('TK 联动配置格式无效');
+	const setup = value as Record<string, unknown>;
+	const ipv4 = typeof setup.address === 'string' ? setup.address.split('.').map(Number) : [];
+	const isIPv4 = ipv4.length === 4 && ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
+	const isPrivateIPv4 = isIPv4 && (ipv4[0] === 10 || (ipv4[0] === 172 && ipv4[1] >= 16 && ipv4[1] <= 31) ||
+		(ipv4[0] === 192 && ipv4[1] === 168) || ipv4[0] === 127);
+	if (setup.schema_version !== 1 || setup.kind !== 'stock-standalone.system-linkage' ||
+		typeof setup.node_id !== 'string' || !/^[A-Za-z0-9_.-]{1,96}$/.test(setup.node_id) ||
+		typeof setup.workspace_id !== 'string' || !/^[A-Za-z0-9_.-]{1,96}$/.test(setup.workspace_id) ||
+		typeof setup.label !== 'string' || !isPrivateIPv4 || !Number.isInteger(setup.port) ||
+		Number(setup.port) < 1 || Number(setup.port) > 65535 || typeof setup.hmac_key !== 'string' ||
+		!/^[0-9a-fA-F]{64}$/.test(setup.hmac_key)) {
+		throw new Error('TK 联动配置缺少有效身份、内网地址、端口或 HMAC 密钥');
+	}
+	return setup as unknown as LinkageSetupPackage;
+}
+
+export function importLinkageSetup(config: BackendConfig, setup: LinkageSetupPackage) {
+	return requestJSON<LinkageSetupResult>(config, '/api/v1/linkage/targets/import', {
+		method: 'POST', headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ ...setup, backend_base_url: config.backendUrl.replace(/\/+$/, '') }),
+	});
 }
 
 export function submitWatchlistAdd(config: BackendConfig, command: WatchlistAddCommand) {

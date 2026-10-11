@@ -26,6 +26,17 @@
 .system-status-result { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 10px 15px; color: var(--text); font-size: 11px; }
 .system-status-footnote, .system-status-inline-error { margin: 0; padding: 0 15px 11px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .system-status-inline-error { color: var(--red, #b23740); overflow-wrap: anywhere; }
+.system-linkage-setup-body { display: grid; gap: 9px; padding: 12px 15px 14px; }
+.system-linkage-setup-body > p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.system-linkage-setup-body code { color: var(--text); font-family: "SFMono-Regular", Consolas, monospace; }
+.system-linkage-setup-body textarea { width: 100%; box-sizing: border-box; resize: vertical; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface, #fff); color: var(--text); font: 10px/1.5 "SFMono-Regular", Consolas, monospace; }
+.system-linkage-setup-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.system-linkage-setup-actions button { display: inline-flex; align-items: center; gap: 6px; min-height: 31px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface, #fff); color: var(--text); font: inherit; cursor: pointer; }
+.system-linkage-setup-actions button:disabled { opacity: .5; cursor: default; }
+.system-linkage-setup-result { display: grid; gap: 4px; font-size: 10px; }
+.system-linkage-setup-result.connected { color: var(--green, #14865f); }
+.system-linkage-setup-result.pending { color: var(--red, #b23740); }
+.system-linkage-setup-result small { color: var(--muted); overflow-wrap: anywhere; }
 .system-status-pill { display: inline-flex; width: fit-content; align-items: center; padding: 3px 7px; border-radius: 6px; background: var(--surface-2, #f3f6fa); color: var(--muted); font-size: 9px; font-style: normal; white-space: nowrap; }
 .system-status-pill.ok { background: var(--green-soft, #eaf7f0); color: var(--green, #14865f); }
 .system-status-pill.warn { background: var(--red-soft, #fff0f0); color: var(--red, #b23740); }

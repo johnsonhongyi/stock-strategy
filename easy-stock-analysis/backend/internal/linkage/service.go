@@ -109,13 +109,15 @@ type ContextEvidence struct {
 }
 
 type Service struct {
-	db      *sql.DB
-	targets map[string]Target
-	client  *http.Client
-	wake    chan struct{}
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	db            *sql.DB
+	targetMu      sync.RWMutex
+	targetWriteMu sync.Mutex
+	targets       map[string]Target
+	client        *http.Client
+	wake          chan struct{}
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
 }
 
 func NewService(databasePath, targetsPath string) (*Service, error) {
@@ -250,6 +252,19 @@ func NewService(databasePath, targetsPath string) (*Service, error) {
 		CREATE TABLE IF NOT EXISTS linkage_workspace_attention_migrations (
 			workspace_id TEXT PRIMARY KEY,
 			migrated_at TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS linkage_targets (
+			node_id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL,
+			label TEXT NOT NULL DEFAULT '',
+			base_url TEXT NOT NULL,
+			key BLOB NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			updated_at TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS linkage_auth_nonces (
+			nonce_key TEXT PRIMARY KEY,
+			timestamp INTEGER NOT NULL
 		);`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("initialize linkage database: %w", err)
@@ -262,6 +277,10 @@ func NewService(databasePath, targetsPath string) (*Service, error) {
 	if err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if err := loadPersistedTargets(db, targets); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("load registered linkage targets: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
@@ -360,14 +379,20 @@ func readKey(path string) ([]byte, error) {
 }
 
 func (s *Service) Targets() []map[string]string {
-	result := make([]map[string]string, 0, len(s.targets))
-	ids := make([]string, 0, len(s.targets))
-	for nodeID := range s.targets {
+	s.targetMu.RLock()
+	targets := make(map[string]Target, len(s.targets))
+	for nodeID, target := range s.targets {
+		targets[nodeID] = target
+	}
+	s.targetMu.RUnlock()
+	result := make([]map[string]string, 0, len(targets))
+	ids := make([]string, 0, len(targets))
+	for nodeID := range targets {
 		ids = append(ids, nodeID)
 	}
 	sort.Strings(ids)
 	for _, nodeID := range ids {
-		target := s.targets[nodeID]
+		target := targets[nodeID]
 		result = append(result, map[string]string{
 			"node_id": target.NodeID, "workspace_id": target.WorkspaceID,
 			"label": target.Label, "status": "configured",
@@ -377,12 +402,13 @@ func (s *Service) Targets() []map[string]string {
 }
 
 func (s *Service) IsConfiguredTarget(workspaceID, nodeID string) bool {
-	target, ok := s.targets[nodeID]
+	target, ok := s.target(nodeID)
 	return ok && target.Enabled && target.WorkspaceID == workspaceID
 }
 
 func (s *Service) Submit(ctx context.Context, command Command) (Operation, bool, error) {
-	if err := validateCommand(command, s.targets); err != nil {
+	targets := s.targetSnapshot()
+	if err := validateCommand(command, targets); err != nil {
 		return Operation{}, false, err
 	}
 	canonical, err := json.Marshal(command)
@@ -430,7 +456,7 @@ func (s *Service) Submit(ctx context.Context, command Command) (Operation, bool,
 		return Operation{}, false, err
 	}
 	for _, nodeID := range command.TargetNodeIDs {
-		target := s.targets[nodeID]
+		target := targets[nodeID]
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO linkage_deliveries(operation_id,node_id,workspace_id,status,next_attempt,updated_at) VALUES(?,?,?,'pending',0,?)`,
 			command.OperationID, target.NodeID, target.WorkspaceID, created,
@@ -607,7 +633,7 @@ func (s *Service) processDue() {
 }
 
 func (s *Service) deliver(operationID, nodeID, status string, attempts int, commandJSON, expiresAt string) {
-	target, ok := s.targets[nodeID]
+	target, ok := s.target(nodeID)
 	if !ok {
 		if successfulDeliveryStatus(status) {
 			s.retryDeliveryPreservingResult(operationID, nodeID, "target_not_configured", attempts+1, 0)
@@ -662,7 +688,7 @@ func (s *Service) deliver(operationID, nodeID, status string, attempts int, comm
 }
 
 func (s *Service) pollOperation(operationID, nodeID, status string, attempts int, expiresAt string) {
-	target, ok := s.targets[nodeID]
+	target, ok := s.target(nodeID)
 	if !ok {
 		if successfulDeliveryStatus(status) {
 			s.retryDeliveryPreservingResult(operationID, nodeID, "target_not_configured", attempts+1, 0)
@@ -815,13 +841,17 @@ func (s *Service) retryDeliveryPreservingResult(operationID, nodeID, message str
 }
 
 func (s *Service) request(target Target, method, path string, body []byte) ([]byte, int, error) {
+	return s.requestContext(s.ctx, target, method, path, body)
+}
+
+func (s *Service) requestContext(ctx context.Context, target Target, method, path string, body []byte) ([]byte, int, error) {
 	endpoint := *target.base
 	endpoint.Path = path
 	var reader io.Reader
 	if body != nil {
 		reader = strings.NewReader(string(body))
 	}
-	req, err := http.NewRequestWithContext(s.ctx, method, endpoint.String(), reader)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint.String(), reader)
 	if err != nil {
 		return nil, 0, err
 	}

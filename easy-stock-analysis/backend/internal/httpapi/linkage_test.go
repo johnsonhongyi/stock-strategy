@@ -46,18 +46,46 @@ func TestLinkageEventsLatestRouteReturnsNewestInChronologicalOrder(t *testing.T)
 	}
 }
 
-func TestLinkageRequiresConfiguredTokenAndOmitsCORS(t *testing.T) {
+func TestLinkageOptionsRequestSupportsCORSPreflight(t *testing.T) {
 	server := NewServer(Config{})
 	defer server.Close()
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/linkage/commands", nil)
 	req.Header.Set("Origin", "https://example.invalid")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
 	}
-	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
-		t.Fatalf("linkage route unexpectedly returned CORS headers: %v", rec.Header())
+	if rec.Header().Get("Access-Control-Allow-Origin") != "https://example.invalid" {
+		t.Fatalf("preflight did not return CORS headers: %v", rec.Header())
+	}
+	if !strings.Contains(rec.Header().Get("Access-Control-Allow-Headers"), "X-Linkage-Signature") {
+		t.Fatalf("preflight omitted HMAC headers: %v", rec.Header())
+	}
+}
+
+func TestLinkageSetupImportRequiresConfiguredBearerToken(t *testing.T) {
+	server := NewServer(Config{Token: "test-token"})
+	defer server.Close()
+
+	unauthorized := httptest.NewRecorder()
+	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/api/v1/linkage/targets/import", strings.NewReader(`{}`)))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated setup import status = %d", unauthorized.Code)
+	}
+	queryToken := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/targets/import?token=test-token", strings.NewReader(`{}`))
+	queryTokenResponse := httptest.NewRecorder()
+	server.ServeHTTP(queryTokenResponse, queryToken)
+	if queryTokenResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("query-string setup token status = %d", queryTokenResponse.Code)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/targets/import", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("authenticated setup import without linkage service = %d: %s", response.Code, response.Body.String())
 	}
 }
 

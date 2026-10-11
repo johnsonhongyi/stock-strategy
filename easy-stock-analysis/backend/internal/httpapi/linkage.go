@@ -22,6 +22,41 @@ func (s *Server) linkageTargets(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) linkageImportTarget(w http.ResponseWriter, r *http.Request) {
+	if s.linkage == nil {
+		writeError(w, http.StatusServiceUnavailable, "desktop linkage is not configured")
+		return
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	var setup linkage.SetupPackage
+	if err := decoder.Decode(&setup); err != nil || ensureJSONEOF(decoder) != nil {
+		writeError(w, http.StatusBadRequest, "invalid desktop linkage setup package")
+		return
+	}
+	result, err := s.linkage.ImportSetup(r.Context(), setup)
+	if err != nil {
+		status := http.StatusServiceUnavailable
+		message := "linkage setup could not be persisted"
+		switch err.Error() {
+		case "invalid_linkage_setup_package", "invalid_linkage_setup_key", "linkage_address_must_be_private_ipv4", "backend_base_url_must_be_private_ipv4":
+			status = http.StatusBadRequest
+			message = err.Error()
+		case "linkage_target_limit_reached":
+			status = http.StatusTooManyRequests
+			message = err.Error()
+		default:
+			if strings.Contains(err.Error(), "conflict") {
+				status = http.StatusConflict
+				message = err.Error()
+			}
+		}
+		writeError(w, status, message)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) linkageSubmit(w http.ResponseWriter, r *http.Request) {
 	if s.linkage == nil {
 		writeError(w, http.StatusServiceUnavailable, "desktop linkage is not configured")

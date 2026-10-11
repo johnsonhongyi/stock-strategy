@@ -1,12 +1,14 @@
 package linkage
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -81,6 +83,93 @@ func TestSubmitPersistsAndSignsDesktopDelivery(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatal("desktop delivery result did not reach the durable operation")
+}
+
+func TestImportSetupPersistsTargetAndConfirmsDesktopConfiguration(t *testing.T) {
+	key := []byte(strings.Repeat("c", 32))
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		verifySignature(t, r, body, key)
+		if r.URL.Path != "/bridge/v1/configure" || r.Method != http.MethodPost {
+			t.Fatalf("unexpected setup callback: %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"status":"configured","node_id":"tk-setup","workspace_id":"ws-setup","connection_test":"hmac_verified"}`)
+	}))
+	defer peer.Close()
+	port := peer.Listener.Addr().(*net.TCPAddr).Port
+	databasePath := filepath.Join(t.TempDir(), "linkage.sqlite")
+	service, err := NewService(databasePath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setup := SetupPackage{
+		SchemaVersion: 1, Kind: "stock-standalone.system-linkage", NodeID: "tk-setup",
+		WorkspaceID: "ws-setup", Label: "TK desk", Address: "127.0.0.1", Port: port,
+		HMACKey: hex.EncodeToString(key), BackendBaseURL: "http://192.168.31.5:20081",
+	}
+	result, err := service.ImportSetup(context.Background(), setup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.TargetRegistered || result.DesktopStatus != "connected" || !service.IsConfiguredTarget("ws-setup", "tk-setup") {
+		t.Fatalf("setup result = %+v", result)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewService(databasePath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if !reopened.IsConfiguredTarget("ws-setup", "tk-setup") {
+		t.Fatal("registered target was not restored after restart")
+	}
+}
+
+func TestAuthenticatePeerRequestRejectsReplayAndCrossNodeRoutes(t *testing.T) {
+	key := []byte(strings.Repeat("p", 32))
+	root := t.TempDir()
+	keyPath := filepath.Join(root, "peer.key")
+	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registryPath := filepath.Join(root, "targets.json")
+	registry, _ := json.Marshal(targetRegistry{Targets: []Target{{
+		NodeID: "tk-auth", WorkspaceID: "ws-auth", BaseURL: "http://127.0.0.1:26676",
+		KeyFile: keyPath, Enabled: true,
+	}}})
+	if err := os.WriteFile(registryPath, registry, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(filepath.Join(root, "linkage.sqlite"), registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	timestamp := fmt.Sprint(time.Now().Unix())
+	nonce := "peer-auth-abcdefghijklmnop"
+	requestURI := "/api/v1/linkage/context"
+	bodyHash := sha256.Sum256(nil)
+	canonical := strings.Join([]string{"GET", requestURI, hex.EncodeToString(bodyHash[:]), timestamp, nonce, "tk-auth", "ws-auth"}, "\n")
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(canonical))
+	headers := make(http.Header)
+	headers.Set("X-Linkage-Node-ID", "tk-auth")
+	headers.Set("X-Linkage-Workspace-ID", "ws-auth")
+	headers.Set("X-Linkage-Timestamp", timestamp)
+	headers.Set("X-Linkage-Nonce", nonce)
+	headers.Set("X-Linkage-Signature", hex.EncodeToString(mac.Sum(nil)))
+	if !service.AuthenticatePeerRequest(http.MethodGet, requestURI, headers, nil) {
+		t.Fatal("valid peer request was rejected")
+	}
+	if service.AuthenticatePeerRequest(http.MethodGet, requestURI, headers, nil) {
+		t.Fatal("replayed peer request was accepted")
+	}
+	if service.AuthenticatePeerRequest(http.MethodPost, "/api/v1/linkage/commands", headers, nil) {
+		t.Fatal("peer HMAC was allowed to submit commands")
+	}
 }
 
 func TestAcceptedDeliveryKeepsPollingUntilApplied(t *testing.T) {

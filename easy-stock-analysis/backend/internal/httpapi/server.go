@@ -497,14 +497,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s.logRequest(r, loggedWriter, requestID, startedAt)
 
 	isLinkage := strings.HasPrefix(r.URL.Path, "/api/v1/linkage/")
-	if !isLinkage {
-		s.withCORS(loggedWriter, r)
-		if r.Method == http.MethodOptions {
-			loggedWriter.WriteHeader(http.StatusNoContent)
-			return
-		}
+	s.withCORS(loggedWriter, r)
+	if r.Method == http.MethodOptions {
+		loggedWriter.WriteHeader(http.StatusNoContent)
+		return
 	}
-	if isLinkage && !s.authorizedLinkage(r) || !isLinkage && !s.authorized(r) {
+	setupImport := r.Method == http.MethodPost && r.URL.Path == "/api/v1/linkage/targets/import"
+	if setupImport && !s.authorizedLinkageAdmin(r) {
+		writeError(loggedWriter, http.StatusUnauthorized, "authorized setup token required")
+		return
+	}
+	if isLinkage && !setupImport && !s.authorizedLinkage(r) || !isLinkage && !s.authorized(r) {
 		writeError(loggedWriter, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -579,6 +582,7 @@ func (s *Server) refreshMasterySnapshot(ctx context.Context, force bool) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/linkage/targets", s.linkageTargets)
+	s.mux.HandleFunc("POST /api/v1/linkage/targets/import", s.linkageImportTarget)
 	s.mux.HandleFunc("POST /api/v1/linkage/commands", s.linkageSubmit)
 	s.mux.HandleFunc("GET /api/v1/linkage/operations/{operation_id}", s.linkageOperation)
 	s.mux.HandleFunc("GET /api/v1/linkage/context", s.linkageContextHandler)

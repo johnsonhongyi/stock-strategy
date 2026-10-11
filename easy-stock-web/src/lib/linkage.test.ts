@@ -1,10 +1,44 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	canReplayWatchlistAddCommand, createLinkageAttentionIntent, createWatchlistAddCommand,
-	getLinkageAttention, isLinkageAttentionIntentSatisfied, SBC_WATCHLIST_SOURCE, submitLinkageAttentionIntent,
+	getLinkageAttention, importLinkageSetup, isLinkageAttentionIntentSatisfied, parseLinkageSetupPackage,
+	SBC_WATCHLIST_SOURCE, submitLinkageAttentionIntent,
 } from './linkage';
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('TK desktop setup handoff', () => {
+	const setupLine = 'SYSTEM_LINKAGE_SETUP_V1=' + JSON.stringify({
+		schema_version: 1, kind: 'stock-standalone.system-linkage', node_id: 'tk-a1', workspace_id: 'ws-b2',
+		label: 'TK desk', address: '192.168.31.42', port: 26676, hmac_key: 'a'.repeat(64),
+	});
+
+	it('extracts the setup package from copied console output', () => {
+		expect(parseLinkageSetupPackage(`[info] starting\n${setupLine}\nready`)).toMatchObject({
+			node_id: 'tk-a1', workspace_id: 'ws-b2', address: '192.168.31.42', port: 26676,
+		});
+	});
+
+	it('rejects setup packages with public addresses or malformed keys', () => {
+		expect(() => parseLinkageSetupPackage(setupLine.replace('192.168.31.42', '8.8.8.8'))).toThrow('内网地址');
+		expect(() => parseLinkageSetupPackage(setupLine.replace('a'.repeat(64), 'bad'))).toThrow('HMAC 密钥');
+	});
+
+	it('registers the package through the authenticated Go API and returns connection status', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+			node_id: 'tk-a1', workspace_id: 'ws-b2', target_registered: true, desktop_status: 'connected',
+		})));
+		vi.stubGlobal('fetch', fetchMock);
+		const setup = parseLinkageSetupPackage(setupLine);
+		const result = await importLinkageSetup({ backendUrl: 'http://192.168.31.5:20081/', token: 'session-token' }, setup);
+		const request = fetchMock.mock.calls[0][1] as RequestInit;
+		expect(result.desktop_status).toBe('connected');
+		expect(new Headers(request.headers).get('Authorization')).toBe('Bearer session-token');
+		expect(JSON.parse(request.body as string)).toMatchObject({
+			node_id: 'tk-a1', backend_base_url: 'http://192.168.31.5:20081',
+		});
+	});
+});
 
 describe('SBC desktop watchlist command contract', () => {
 	it('uses the source namespace accepted by the Go command validator', () => {

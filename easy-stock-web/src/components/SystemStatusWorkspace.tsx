@@ -1,7 +1,8 @@
-import { Activity, AlertTriangle, CheckCircle2, Clock3, Database, LoaderCircle, RefreshCw, Server, TimerReset } from 'lucide-react';
+import { Activity, AlertTriangle, CheckCircle2, Clock3, ClipboardPaste, Database, LoaderCircle, RefreshCw, Server, TimerReset } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { BackendConfig, requestJSON } from '../lib/backend';
+import { importLinkageSetup, parseLinkageSetupPackage, type LinkageSetupPackage, type LinkageSetupResult } from '../lib/linkage';
 import './system-status.css';
 import { MarketNetworkSettings } from './MarketNetworkSettings';
 
@@ -107,6 +108,67 @@ function stateTone(value: string) {
 	return 'muted';
 }
 
+function LinkageSetupPanel({ config }: { config: BackendConfig | null }) {
+	const [consoleText, setConsoleText] = useState('');
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState('');
+	const [result, setResult] = useState<LinkageSetupResult | null>(null);
+	const [lastPackage, setLastPackage] = useState<LinkageSetupPackage | null>(null);
+
+	const submit = async (setup: LinkageSetupPackage) => {
+		if (!config) { setError('后端连接配置尚未就绪'); return; }
+		setBusy(true);
+		setError('');
+		setResult(null);
+		try {
+			const response = await importLinkageSetup(config, setup);
+			setResult(response);
+			setConsoleText('');
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : '联动配置失败');
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const configure = async (text: string) => {
+		try {
+			const setup = parseLinkageSetupPackage(text);
+			setLastPackage(setup);
+			await submit(setup);
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : '联动配置失败');
+		}
+	};
+
+	const readClipboardAndConfigure = async () => {
+		try {
+			const text = await navigator.clipboard.readText();
+			setConsoleText(text);
+			await configure(text);
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : '无法读取剪贴板，请粘贴到输入框');
+		}
+	};
+
+	return <section className="system-status-panel system-linkage-setup" aria-label="TK 桌面联动配置">
+		<header><div><span><ClipboardPaste size={15} /> 桌面节点自助接入</span><strong>粘贴 TK 控制台配置并测试</strong></div><em className={`system-status-pill ${result?.desktop_status === 'connected' ? 'ok' : result ? 'warn' : 'muted'}`}>{result?.desktop_status === 'connected' ? '回调已验证' : result ? '待重试' : '待配置'}</em></header>
+		<div className="system-linkage-setup-body">
+			<p>在 TK 启动控制台复制 <code>SYSTEM_LINKAGE_SETUP_V1=…</code> 行；可直接读取剪贴板，也可粘贴整段控制台内容。</p>
+			<textarea aria-label="TK 控制台配置内容" value={consoleText} onChange={(event) => setConsoleText(event.target.value)} placeholder="粘贴 TK 控制台输出，或使用剪贴板一键配置" rows={3} disabled={busy} />
+			<div className="system-linkage-setup-actions">
+				<button type="button" onClick={() => void readClipboardAndConfigure()} disabled={!config || busy}>{busy ? <LoaderCircle className="system-status-spin" size={14} /> : <ClipboardPaste size={14} />}从剪贴板配置并测试</button>
+				<button type="button" onClick={() => void (lastPackage ? submit(lastPackage) : configure(consoleText))} disabled={!config || busy || (!consoleText.trim() && !lastPackage)}>{result ? '重试配置与连接测试' : '配置并测试'}</button>
+			</div>
+			{error && <p className="system-status-inline-error">{error}</p>}
+			{result && <div className={`system-linkage-setup-result ${result.desktop_status}`} aria-live="polite">
+				<strong>{result.desktop_status === 'connected' ? '桌面节点已登记；Go → TK 的 HMAC 配置回调已验证，TK → Go 上下文同步随后启动。' : `桌面节点已登记；Go → TK 回调未确认：${result.desktop_error || '请检查网络后重试'}。`}</strong>
+				<small>工作区：{result.workspace_id} · 节点：{result.node_id}</small>
+			</div>}
+		</div>
+	</section>;
+}
+
 export function SystemStatusWorkspace({ config, refreshKey }: { config: BackendConfig | null; refreshKey: number }) {
 	const [status, setStatus] = useState<SystemStatus | null>(null);
 	const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -164,6 +226,7 @@ export function SystemStatusWorkspace({ config, refreshKey }: { config: BackendC
 					<button type="button" onClick={() => setManualRefreshKey((value) => value + 1)} aria-label="刷新状态"><RefreshCw size={16} />刷新</button>
 				</div>
 			</header>
+			<LinkageSetupPanel config={config} />
 			{loadError && <div className="system-status-alert"><AlertTriangle size={16} /><span>状态读取失败：{loadError}{status ? '；以下显示最近一次成功读取的数据' : ''}</span></div>}
 			{!status && loadState === 'loading' && <div className="system-status-loading"><LoaderCircle className="system-status-spin" size={18} />正在读取后端状态…</div>}
 			{status && <>
