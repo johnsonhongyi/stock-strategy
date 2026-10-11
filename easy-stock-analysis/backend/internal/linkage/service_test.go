@@ -639,3 +639,104 @@ func TestSavedOperationReconciliationOutlivesCommandTTL(t *testing.T) {
 		t.Fatal("settled consumers need immediate reconciliation")
 	}
 }
+
+func TestContextRetentionPreservesEventReplayDependencies(t *testing.T) {
+	service, err := NewService(filepath.Join(t.TempDir(), "linkage.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	ctx := t.Context()
+	old := time.Now().UTC().Add(-40 * 24 * time.Hour).Format(time.RFC3339Nano)
+	for _, id := range []string{"referenced", "causation", "unused"} {
+		if _, err := service.db.ExecContext(ctx, `INSERT INTO linkage_context_snapshots(snapshot_id,trade_date,created_at,payload) VALUES(?,?,?,?)`, id, "2026-01-01", old, []byte(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event := ContextEvent{EventID: "retained", EventType: "test", OriginNode: "test", CausationID: "causation", SourceSnapshotIDs: []string{"referenced"}, TradeDate: "2026-01-01", OccurredAt: time.Now().UTC().Format(time.RFC3339Nano), Payload: json.RawMessage(`{}`)}
+	if err := service.StoreContextSnapshot(ctx, "current", "2026-01-01", []byte(`{}`), []ContextEvent{event}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"referenced", "causation"} {
+		var count int
+		if err := service.db.QueryRowContext(ctx, `SELECT count(*) FROM linkage_context_snapshots WHERE snapshot_id=?`, id).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("missing dependency %s: count=%d err=%v", id, count, err)
+		}
+	}
+	var count int
+	if err := service.db.QueryRowContext(ctx, `SELECT count(*) FROM linkage_context_snapshots WHERE snapshot_id='unused'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("unused snapshot retained: count=%d err=%v", count, err)
+	}
+	expired := time.Now().UTC().Add(-91 * 24 * time.Hour).Format(time.RFC3339Nano)
+	if _, err := service.db.ExecContext(ctx, `UPDATE linkage_context_events SET occurred_at=? WHERE event_id='retained'`, expired); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.StoreContextSnapshot(ctx, "next", "2026-01-01", []byte(`{}`), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.db.QueryRowContext(ctx, `SELECT count(*) FROM linkage_context_snapshots WHERE snapshot_id IN ('referenced','causation')`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("expired dependencies retained: count=%d err=%v", count, err)
+	}
+}
+
+func TestWorkspaceScopedContextReadsStayIsolated(t *testing.T) {
+	service, err := NewService(filepath.Join(t.TempDir(), "linkage.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	ctx := t.Context()
+	service.targets = map[string]Target{
+		"node-a": {NodeID: "node-a", WorkspaceID: "workspace-a", Enabled: true},
+		"node-b": {NodeID: "node-b", WorkspaceID: "workspace-b", Enabled: true},
+	}
+	for _, item := range []struct{ workspace, node, snapshot, event string }{
+		{"workspace-a", "node-a", "snapshot-a", "event-a"},
+		{"workspace-b", "node-b", "snapshot-b", "event-b"},
+	} {
+		payload, err := json.Marshal(map[string]string{"workspace_id": item.workspace, "snapshot_id": item.snapshot})
+		if err != nil {
+			t.Fatal(err)
+		}
+		event := ContextEvent{EventID: item.event, EventType: "test", OriginNode: item.node,
+			CausationID: item.snapshot, SourceSnapshotIDs: []string{item.snapshot}, TradeDate: "2026-10-11",
+			OccurredAt: time.Now().UTC().Format(time.RFC3339Nano), Payload: json.RawMessage("{}")}
+		if err := service.StoreContextSnapshot(ctx, item.snapshot, "2026-10-11", payload, []ContextEvent{event}); err != nil {
+			t.Fatal(err)
+		}
+		evidencePayload, err := json.Marshal(map[string]string{"source": "same-source", "node": item.node})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = service.StoreContextEvidence(ctx, ContextEvidence{WorkspaceID: item.workspace, NodeID: item.node,
+			SourceID: "same-source", SnapshotID: "evidence-" + item.node, TradeDate: "2026-10-11",
+			AsOf: "2026-10-11T09:30:00+08:00", Payload: evidencePayload})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, workspace := range []string{"workspace-a", "workspace-b"} {
+		payload, err := service.LatestContextSnapshotForWorkspace(ctx, workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]string
+		if err := json.Unmarshal(payload, &got); err != nil || got["workspace_id"] != workspace {
+			t.Fatalf("workspace snapshot leaked or missing: workspace=%s got=%v err=%v", workspace, got, err)
+		}
+		evidence, err := service.RecentContextEvidenceForWorkspace(ctx, workspace)
+		if err != nil || len(evidence) != 1 || evidence[0].WorkspaceID != workspace {
+			t.Fatalf("workspace evidence leaked or missing: workspace=%s evidence=%+v err=%v", workspace, evidence, err)
+		}
+		events, err := service.LatestContextEventsForWorkspace(ctx, workspace, 10)
+		if err != nil || len(events) != 1 || events[0].EventID != "event-"+workspace[len("workspace-"):] {
+			t.Fatalf("workspace events leaked or missing: workspace=%s events=%+v err=%v", workspace, events, err)
+		}
+	}
+	if service.HasWorkspace("workspace-a") != true || service.HasWorkspace("foreign") {
+		t.Fatal("workspace registry check returned an invalid result")
+	}
+	if evidence, err := service.RecentContextEvidenceForWorkspace(ctx, ""); err != nil || len(evidence) != 0 {
+		t.Fatalf("unscoped read included private evidence: evidence=%+v err=%v", evidence, err)
+	}
+}

@@ -1,8 +1,8 @@
-import { linkageOperationRefreshDelay, type LinkageOperation } from "./linkage";
+import { isLinkageOperationSettled, linkageContextTTL, linkageOperationRefreshDelay, normalizeLinkageStockSymbol, type LinkageOperation } from "./linkage";
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	canReplayWatchlistAddCommand, createLinkageAttentionIntent, createWatchlistAddCommand,
-	getLinkageAttention, importLinkageSetup, isLinkageAttentionIntentSatisfied, parseLinkageSetupPackage,
+	getLatestLinkageEvents, getLinkageAttention, getLinkageContext, importLinkageSetup, isLinkageAttentionIntentSatisfied, parseLinkageSetupPackage,
 	SBC_WATCHLIST_SOURCE, submitLinkageAttentionIntent,
 } from './linkage';
 
@@ -42,6 +42,15 @@ describe('TK desktop setup handoff', () => {
 });
 
 describe('SBC desktop watchlist command contract', () => {
+	it('accepts only correctly exchanged Shanghai and Shenzhen A-share symbols', () => {
+		expect(normalizeLinkageStockSymbol('600000')).toBe('600000.SH');
+		expect(normalizeLinkageStockSymbol('000001.sz')).toBe('000001.SZ');
+		expect(normalizeLinkageStockSymbol('1')).toBe('000001.SZ');
+		for (const symbol of ['510300.SH', '399001.SZ', '900901.SH', '200001.SZ', '600000.SZ', '600000.BJ']) {
+			expect(normalizeLinkageStockSymbol(symbol)).toBe('');
+		}
+	});
+
 	it('uses the source namespace accepted by the Go command validator', () => {
 		const command = createWatchlistAddCommand({
 			workspaceID: 'workspace', targetNodeID: 'tk-1', symbol: '600000.SH',
@@ -136,4 +145,37 @@ describe('watchlist receipt lifecycle', () => {
         expect(linkageOperationRefreshDelay(operation('applied'))).toBe(30000);
         expect(linkageOperationRefreshDelay(operation('rejected'))).toBe(0);
     });
+    it('does not settle while a consumer is offline or quotes are still pending', () => {
+        expect(isLinkageOperationSettled(operation('applied', 'not_running'))).toBe(false);
+        expect(isLinkageOperationSettled(operation('applied', 'synced', 'pending_fetch'))).toBe(false);
+        expect(isLinkageOperationSettled(operation('applied'))).toBe(true);
+        expect(isLinkageOperationSettled(operation('rejected'))).toBe(true);
+    });
+});
+
+
+describe('linkage context freshness', () => {
+	it('uses the server issued TTL and rejects invalid expiry metadata', () => {
+		expect(linkageContextTTL({
+			received_at: '2026-10-10T01:00:00Z', expires_at: '2026-10-10T01:00:30Z',
+		})).toBe(30_000);
+		expect(linkageContextTTL({
+			received_at: '2026-10-10T01:00:00Z', expires_at: '2026-10-10T01:00:00Z',
+		})).toBe(0);
+		expect(linkageContextTTL({ received_at: 'invalid', expires_at: 'invalid' })).toBe(0);
+	});
+});
+
+describe('workspace scoped context reads', () => {
+	it('includes the selected workspace on context and event requests', async () => {
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(new Response(JSON.stringify({ schema_version: 1, workspace_id: 'ws-b2' })))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ schema_version: 1, events: [] })));
+		vi.stubGlobal('fetch', fetchMock);
+		const config = { backendUrl: 'http://192.168.31.5:20081', token: 'session-token' };
+		await getLinkageContext(config, 'ws-b2');
+		await getLatestLinkageEvents(config, 12, 'ws-b2');
+		expect(new URL(String(fetchMock.mock.calls[0][0])).searchParams.get('workspace_id')).toBe('ws-b2');
+		expect(new URL(String(fetchMock.mock.calls[1][0])).searchParams.get('workspace_id')).toBe('ws-b2');
+	});
 });

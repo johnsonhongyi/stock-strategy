@@ -108,6 +108,14 @@ function stateTone(value: string) {
 	return 'muted';
 }
 
+function linkageSetupErrorMessage(error: unknown) {
+	const message = error instanceof Error ? error.message : '';
+	if (message === 'authorized setup token required') {
+		return 'Go 后端已启用 A_STOCK_TOKEN，但当前 Web 请求缺少或带了错误的 Bearer token。TK 的 hmac_key 只用于 HMAC 握手；请按部署脚本同步两端 token、重建 Web 并刷新页面后重试。';
+	}
+	return message || '联动配置失败';
+}
+
 function LinkageSetupPanel({ config }: { config: BackendConfig | null }) {
 	const [consoleText, setConsoleText] = useState('');
 	const [busy, setBusy] = useState(false);
@@ -125,7 +133,7 @@ function LinkageSetupPanel({ config }: { config: BackendConfig | null }) {
 			setResult(response);
 			setConsoleText('');
 		} catch (caught) {
-			setError(caught instanceof Error ? caught.message : '联动配置失败');
+			setError(linkageSetupErrorMessage(caught));
 		} finally {
 			setBusy(false);
 		}
@@ -137,7 +145,7 @@ function LinkageSetupPanel({ config }: { config: BackendConfig | null }) {
 			setLastPackage(setup);
 			await submit(setup);
 		} catch (caught) {
-			setError(caught instanceof Error ? caught.message : '联动配置失败');
+			setError(linkageSetupErrorMessage(caught));
 		}
 	};
 

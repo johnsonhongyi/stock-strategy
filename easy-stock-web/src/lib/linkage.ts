@@ -58,6 +58,23 @@ export type LinkageOperation = {
 	}>;
 };
 
+export function isLinkageOperationSettled(operation: LinkageOperation | null): boolean {
+    if (!operation?.deliveries?.length) return false;
+    const failed = (status: string | undefined) => ['rejected', 'expired', 'failed'].includes(status || '');
+    return operation.deliveries.every((delivery) => {
+        if (failed(delivery.status) || failed(delivery.result?.status)) return true;
+        const receipt = delivery.result?.result;
+        if (!receipt?.saved?.persisted) return false;
+        return ['TK', 'ATS'].every((name) => {
+            const consumer = receipt.consumers?.[name];
+            return consumer?.status === 'error' || (
+                consumer?.status === 'synced' &&
+                ['ready', 'market_closed'].includes(consumer.quote_status || '')
+            );
+        });
+    });
+}
+
 // Keep applied commands observable after the execution TTL: a consumer can start later.
 export function linkageOperationRefreshDelay(operation: LinkageOperation): number {
     if (!operation.deliveries.length) return 2000;
@@ -78,10 +95,12 @@ export function linkageOperationRefreshDelay(operation: LinkageOperation): numbe
 
 export type LinkageContextSnapshot = {
 	schema_version: number;
+	workspace_id: string;
 	snapshot_id: string;
 	trade_date?: string;
 	session_phase?: string;
 	freshness: string;
+	received_at: string;
 	expires_at: string;
 	sources?: Array<{ id: string; name: string; status: string; freshness: string; error?: string }>;
 	coverage?: Array<{ scope: string; observed_count: number; total_expected?: number; coverage?: number; complete: boolean; is_sample: boolean; source: string }>;
@@ -90,6 +109,13 @@ export type LinkageContextSnapshot = {
 	ladder?: { current: { levels: Array<{ label: string; stocks: Array<{ symbol: string; streak: number }> }> } };
 	evidence?: Array<{ source_id: string; source_name: string; snapshot_id: string; trade_date: string; as_of: string; freshness: string; payload: { state?: string; source_freshness?: string; candidate_count?: number; candidate_codes?: string[]; candidate_codes_complete?: boolean; candidates?: Array<{ symbol: string; name?: string; grade?: string; score?: number; classification?: string }>; coverage?: { scope?: string; observed_count?: number; total_count?: number; complete?: boolean; is_sample?: boolean; source?: string }; roles?: Array<{ symbol: string; name?: string; role: string; sector?: string; classification?: string }> } }>;
 };
+
+export function linkageContextTTL(snapshot: Pick<LinkageContextSnapshot, 'received_at' | 'expires_at'>) {
+	const receivedAt = Date.parse(snapshot.received_at);
+	const expiresAt = Date.parse(snapshot.expires_at);
+	if (!Number.isFinite(receivedAt) || !Number.isFinite(expiresAt) || expiresAt <= receivedAt) return 0;
+	return Math.min(expiresAt - receivedAt, 5 * 60_000);
+}
 
 export type LinkageContextEvent = {
 	event_id: string;
@@ -145,6 +171,17 @@ function requestID() {
 	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
 	const bytes = crypto.getRandomValues(new Uint8Array(16));
 	return Array.from(bytes, (value: number) => value.toString(16).padStart(2, '0')).join('');
+}
+
+export function normalizeLinkageStockSymbol(value: string) {
+	const normalized = value.trim().toUpperCase();
+	const match = /^(\d{1,6})(?:\.(SH|SZ))?$/.exec(normalized);
+	if (!match || match[2] && match[1].length !== 6) return '';
+	const code = match[1].padStart(6, '0');
+	const exchange = /^(600|601|603|605|688|689)/.test(code) ? 'SH'
+		: /^(000|001|002|003|300|301)/.test(code) ? 'SZ' : '';
+	if (!exchange || match[2] && match[2] !== exchange) return '';
+	return `${code}.${exchange}`;
 }
 
 export function createWatchlistAddCommand(input: {
@@ -225,13 +262,16 @@ export function getLinkageOperation(config: BackendConfig, operationID: string) 
 	return requestJSON<LinkageOperation>(config, `/api/v1/linkage/operations/${encodeURIComponent(operationID)}`);
 }
 
-export function getLinkageContext(config: BackendConfig) {
-	return requestJSON<LinkageContextSnapshot>(config, '/api/v1/linkage/context');
+export function getLinkageContext(config: BackendConfig, workspaceID?: string) {
+	const query = workspaceID ? '?' + new URLSearchParams({ workspace_id: workspaceID }) : '';
+	return requestJSON<LinkageContextSnapshot>(config, '/api/v1/linkage/context' + query);
 }
 
-export function getLatestLinkageEvents(config: BackendConfig, limit = 12) {
+export function getLatestLinkageEvents(config: BackendConfig, limit = 12, workspaceID?: string) {
+	const query = new URLSearchParams({ latest: 'true', limit: String(Math.max(1, Math.min(50, limit))) });
+	if (workspaceID) query.set('workspace_id', workspaceID);
 	return requestJSON<{ schema_version: number; events: LinkageContextEvent[] }>(
-		config, `/api/v1/linkage/events?latest=true&limit=${Math.max(1, Math.min(50, limit))}`,
+		config, '/api/v1/linkage/events?' + query,
 	);
 }
 

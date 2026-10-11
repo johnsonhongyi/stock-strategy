@@ -19,6 +19,7 @@ import (
 
 type linkageContextSnapshot struct {
 	SchemaVersion int                      `json:"schema_version"`
+	WorkspaceID   string                   `json:"workspace_id"`
 	Source        string                   `json:"source"`
 	SnapshotID    string                   `json:"snapshot_id"`
 	Version       int64                    `json:"version"`
@@ -165,6 +166,11 @@ func (s *Server) linkageContextHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "desktop linkage is not configured")
 		return
 	}
+	workspaceID, ok := linkageContextWorkspace(r, s.linkage)
+	if !ok {
+		writeError(w, http.StatusForbidden, "linkage workspace is not configured")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
 	results := make(chan linkageContextResult, 3)
@@ -228,7 +234,8 @@ func (s *Server) linkageContextHandler(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC()
 	snapshot := buildLinkageContextSnapshot(now, themes, themeMeta, themeErr, heat, heatErr, ladder, ladderErr)
-	evidence, evidenceErr := s.linkage.RecentContextEvidence(r.Context())
+	snapshot.WorkspaceID = workspaceID
+	evidence, evidenceErr := s.linkage.RecentContextEvidenceForWorkspace(r.Context(), workspaceID)
 	if evidenceErr != nil {
 		snapshot.Errors = append(snapshot.Errors, "context_evidence: unavailable")
 		if snapshot.Freshness == "fresh" {
@@ -239,7 +246,7 @@ func (s *Server) linkageContextHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.linkageContextMu.Lock()
 	defer s.linkageContextMu.Unlock()
-	previous, previousErr := s.linkage.LatestContextSnapshot(r.Context())
+	previous, previousErr := s.linkage.LatestContextSnapshotForWorkspace(r.Context(), workspaceID)
 	if previousErr != nil && !errors.Is(previousErr, sql.ErrNoRows) {
 		writeError(w, http.StatusServiceUnavailable, "could not load previous linkage context")
 		return
@@ -259,6 +266,24 @@ func (s *Server) linkageContextHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, snapshot)
 }
 
+func linkageContextWorkspace(r *http.Request, service *linkage.Service) (string, bool) {
+	workspaceID := strings.TrimSpace(r.URL.Query().Get("workspace_id"))
+	peerWorkspace := strings.TrimSpace(r.Header.Get("X-Linkage-Workspace-ID"))
+	peerNode := strings.TrimSpace(r.Header.Get("X-Linkage-Node-ID"))
+	if peerWorkspace != "" {
+		if workspaceID != "" && workspaceID != peerWorkspace {
+			return "", false
+		}
+		workspaceID = peerWorkspace
+		if peerNode == "" || !service.IsConfiguredTarget(workspaceID, peerNode) {
+			return "", false
+		}
+	} else if workspaceID != "" && !service.HasWorkspace(workspaceID) {
+		return "", false
+	}
+	return workspaceID, true
+}
+
 func (s *Server) linkageEventsHandler(w http.ResponseWriter, r *http.Request) {
 	if s.linkage == nil {
 		writeError(w, http.StatusServiceUnavailable, "desktop linkage is not configured")
@@ -271,12 +296,17 @@ func (s *Server) linkageEventsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	workspaceID, ok := linkageContextWorkspace(r, s.linkage)
+	if !ok {
+		writeError(w, http.StatusForbidden, "linkage workspace is not configured")
+		return
+	}
 	var events []linkage.ContextEvent
 	var err error
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("latest")), "true") {
-		events, err = s.linkage.LatestContextEvents(r.Context(), limit)
+		events, err = s.linkage.LatestContextEventsForWorkspace(r.Context(), workspaceID, limit)
 	} else {
-		events, err = s.linkage.ContextEvents(r.Context(), strings.TrimSpace(r.URL.Query().Get("after")), limit)
+		events, err = s.linkage.ContextEventsForWorkspace(r.Context(), workspaceID, strings.TrimSpace(r.URL.Query().Get("after")), limit)
 	}
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "could not load linkage events")
@@ -382,91 +412,112 @@ func buildLinkageContextSnapshot(now time.Time, overviews []foundation.ThemeOver
 }
 
 func mergeLinkageContextEvidence(snapshot linkageContextSnapshot, stored []linkage.ContextEvidence) linkageContextSnapshot {
-	latest := map[string]linkage.ContextEvidence{}
-	var latestAnomaly linkage.ContextEvidence
-	anomalyEvents := make([]map[string]any, 0)
-	seenAnomalyEvents := map[string]bool{}
+	return mergeLinkageContextEvidenceAt(snapshot, stored, time.Now())
+}
+
+func mergeLinkageContextEvidenceAt(snapshot linkageContextSnapshot, stored []linkage.ContextEvidence, now time.Time) linkageContextSnapshot {
+	type evidenceKey struct{ nodeID, sourceID string }
+	latest := map[evidenceKey]linkage.ContextEvidence{}
+	latestAnomaly := map[string]linkage.ContextEvidence{}
+	anomalyEvents := map[string][]map[string]any{}
+	seenAnomalyEvents := map[string]map[string]bool{}
 	for _, item := range stored {
-		current, exists := latest[item.SourceID]
+		key := evidenceKey{nodeID: item.NodeID, sourceID: item.SourceID}
+		current, exists := latest[key]
 		if !exists || item.TradeDate > current.TradeDate ||
-			(item.TradeDate == current.TradeDate && item.AsOf > current.AsOf) {
-			latest[item.SourceID] = item
+			(item.TradeDate == current.TradeDate && (item.AsOf > current.AsOf ||
+				(item.AsOf == current.AsOf && item.ReceivedAt > current.ReceivedAt))) {
+			latest[key] = item
 		}
 		if item.SourceID == "tk.anomaly" {
-			if latestAnomaly.SnapshotID == "" || item.TradeDate > latestAnomaly.TradeDate ||
-				(item.TradeDate == latestAnomaly.TradeDate && item.AsOf > latestAnomaly.AsOf) {
-				latestAnomaly = item
+			currentAnomaly := latestAnomaly[item.NodeID]
+			if currentAnomaly.SnapshotID == "" || item.TradeDate > currentAnomaly.TradeDate ||
+				(item.TradeDate == currentAnomaly.TradeDate && item.AsOf > currentAnomaly.AsOf) {
+				latestAnomaly[item.NodeID] = item
 			}
 			var payload struct {
 				Events []map[string]any `json:"events"`
 			}
 			if json.Unmarshal(item.Payload, &payload) == nil {
+				if seenAnomalyEvents[item.NodeID] == nil {
+					seenAnomalyEvents[item.NodeID] = map[string]bool{}
+				}
 				for _, event := range payload.Events {
-					if eventID, ok := event["event_id"].(string); ok && eventID != "" && !seenAnomalyEvents[eventID] {
-						seenAnomalyEvents[eventID] = true
-						anomalyEvents = append(anomalyEvents, event)
+					if eventID, ok := event["event_id"].(string); ok && eventID != "" && !seenAnomalyEvents[item.NodeID][eventID] {
+						seenAnomalyEvents[item.NodeID][eventID] = true
+						anomalyEvents[item.NodeID] = append(anomalyEvents[item.NodeID], event)
 					}
 				}
 			}
 		}
 	}
-	if latestAnomaly.SnapshotID != "" {
-		sort.Slice(anomalyEvents, func(i, j int) bool {
-			left, _ := anomalyEvents[i]["observed_at"].(string)
-			right, _ := anomalyEvents[j]["observed_at"].(string)
+	for nodeID, item := range latestAnomaly {
+		events := anomalyEvents[nodeID]
+		sort.Slice(events, func(i, j int) bool {
+			left, _ := events[i]["observed_at"].(string)
+			right, _ := events[j]["observed_at"].(string)
 			if left == right {
-				return fmt.Sprint(anomalyEvents[i]["event_id"]) < fmt.Sprint(anomalyEvents[j]["event_id"])
+				return fmt.Sprint(events[i]["event_id"]) < fmt.Sprint(events[j]["event_id"])
 			}
 			return left < right
 		})
-		if len(anomalyEvents) > 100 {
-			anomalyEvents = anomalyEvents[len(anomalyEvents)-100:]
+		if len(events) > 100 {
+			events = events[len(events)-100:]
 		}
-		if payload, err := json.Marshal(map[string]any{"schema_version": 1, "source_id": "tk.anomaly", "events": anomalyEvents}); err == nil {
-			latestAnomaly.Payload = payload
-			latest["tk.anomaly"] = latestAnomaly
+		if payload, err := json.Marshal(map[string]any{"schema_version": 1, "source_id": "tk.anomaly", "events": events}); err == nil {
+			item.Payload = payload
+			latest[evidenceKey{nodeID: nodeID, sourceID: "tk.anomaly"}] = item
 		}
 	}
+	keys := make([]evidenceKey, 0, len(latest))
+	for key := range latest {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].sourceID == keys[j].sourceID {
+			return keys[i].nodeID < keys[j].nodeID
+		}
+		return keys[i].sourceID < keys[j].sourceID
+	})
 	sourceIndexes := map[string]int{}
+	assignedEvidence := map[string]bool{}
 	for index, source := range snapshot.Sources {
 		sourceIndexes[source.ID] = index
 	}
 	snapshot.Evidence = make([]linkageContextEvidence, 0, len(latest))
-	for sourceID, item := range latest {
+	for _, key := range keys {
+		item := latest[key]
+		sourceID := key.sourceID
 		name := linkageEvidenceSources[sourceID]
 		if name == "" {
 			name = sourceID
 		}
-		freshness := "historical"
-		if snapshot.TradeDate != "" {
-			if item.TradeDate == snapshot.TradeDate {
-				freshness = "fresh"
-			} else {
-				freshness = "stale"
-			}
+		freshness := linkageEvidenceFreshness(item, snapshot.TradeDate, now)
+		snapshot.Evidence = append(snapshot.Evidence, linkageContextEvidence{SourceID: sourceID, SourceName: name,
+			NodeID: item.NodeID, SnapshotID: item.SnapshotID, TradeDate: item.TradeDate, AsOf: item.AsOf,
+			ReceivedAt: item.ReceivedAt, Freshness: freshness, Payload: append(json.RawMessage(nil), item.Payload...)})
+		outputID := sourceID
+		if assignedEvidence[sourceID] {
+			outputID += "@" + item.NodeID
 		}
-		var sourceState struct {
-			Freshness string `json:"source_freshness"`
-		}
-		if json.Unmarshal(item.Payload, &sourceState) == nil && sourceState.Freshness == "stale" {
-			freshness = "stale"
-		}
-		evidence := linkageContextEvidence{SourceID: sourceID, SourceName: name, NodeID: item.NodeID,
-			SnapshotID: item.SnapshotID, TradeDate: item.TradeDate, AsOf: item.AsOf,
-			ReceivedAt: item.ReceivedAt, Freshness: freshness, Payload: append(json.RawMessage(nil), item.Payload...)}
-		snapshot.Evidence = append(snapshot.Evidence, evidence)
-		source := linkageContextSource{ID: sourceID, Name: name, Status: "available", Source: item.NodeID,
+		source := linkageContextSource{ID: outputID, Name: name, Status: "available", Source: item.NodeID,
 			TradeDate: item.TradeDate, AsOf: item.AsOf, Freshness: freshness}
-		if index, exists := sourceIndexes[sourceID]; exists {
+		if index, exists := sourceIndexes[outputID]; exists {
 			snapshot.Sources[index] = source
 		} else {
-			sourceIndexes[sourceID] = len(snapshot.Sources)
+			sourceIndexes[outputID] = len(snapshot.Sources)
 			snapshot.Sources = append(snapshot.Sources, source)
 		}
+		assignedEvidence[sourceID] = true
 		snapshot.AsOf = minTimeString(snapshot.AsOf, item.AsOf)
 	}
 	sort.Slice(snapshot.Sources, func(i, j int) bool { return snapshot.Sources[i].ID < snapshot.Sources[j].ID })
-	sort.Slice(snapshot.Evidence, func(i, j int) bool { return snapshot.Evidence[i].SourceID < snapshot.Evidence[j].SourceID })
+	sort.Slice(snapshot.Evidence, func(i, j int) bool {
+		if snapshot.Evidence[i].SourceID == snapshot.Evidence[j].SourceID {
+			return snapshot.Evidence[i].NodeID < snapshot.Evidence[j].NodeID
+		}
+		return snapshot.Evidence[i].SourceID < snapshot.Evidence[j].SourceID
+	})
 	if snapshot.AsOf == "" {
 		snapshot.Freshness = "unavailable"
 		return snapshot
@@ -484,6 +535,92 @@ func mergeLinkageContextEvidence(snapshot linkageContextSnapshot, stored []linka
 		snapshot.Freshness = "partial"
 	}
 	return snapshot
+}
+
+func linkageEvidenceFreshness(item linkage.ContextEvidence, tradeDate string, now time.Time) string {
+	if item.TradeDate == "" || tradeDate == "" {
+		return "unknown"
+	}
+	if item.TradeDate != tradeDate {
+		return "stale"
+	}
+	var sourceState struct {
+		Freshness string `json:"source_freshness"`
+	}
+	if err := json.Unmarshal(item.Payload, &sourceState); err != nil {
+		return "unknown"
+	}
+	switch item.SourceID {
+	case "ats.leader":
+		if sourceState.Freshness == "stale" {
+			return "stale"
+		}
+		if sourceState.Freshness != "fresh" {
+			return "unknown"
+		}
+		asOf, err := time.Parse(time.RFC3339Nano, item.AsOf)
+		if err != nil {
+			return "unknown"
+		}
+		china := time.FixedZone("Asia/Shanghai", 8*60*60)
+		if asOf.In(china).Format("2006-01-02") != tradeDate {
+			return "stale"
+		}
+		age := now.Sub(asOf)
+		if age > 90*time.Second || age < -30*time.Second {
+			return "stale"
+		}
+		return "fresh"
+	case "tk.auction":
+		if sourceState.Freshness == "stale" {
+			return "stale"
+		}
+		asOf, err := time.Parse(time.RFC3339Nano, item.AsOf)
+		if err != nil {
+			return "unknown"
+		}
+		china := time.FixedZone("Asia/Shanghai", 8*60*60)
+		localNow := now.In(china)
+		if localNow.Format("2006-01-02") != tradeDate {
+			return "stale"
+		}
+		auctionAt := asOf.In(china)
+		if auctionAt.Format("2006-01-02") != tradeDate || auctionAt.Hour() != 9 || auctionAt.Minute() < 15 || auctionAt.Minute() >= 30 {
+			return "unknown"
+		}
+		if localNow.Hour() > 9 || localNow.Hour() == 9 && localNow.Minute() >= 30 {
+			return "historical"
+		}
+		age := now.Sub(asOf)
+		if age > 5*time.Minute || age < -30*time.Second {
+			return "stale"
+		}
+		return "fresh"
+	case "instock.candidates":
+		switch sourceState.Freshness {
+		case "fresh":
+			return "fresh"
+		case "stale":
+			return "stale"
+		default:
+			return "unknown"
+		}
+	case "ats.ipo", "tk.anomaly":
+		asOf, err := time.Parse(time.RFC3339Nano, item.AsOf)
+		if err != nil {
+			return "unknown"
+		}
+		china := time.FixedZone("Asia/Shanghai", 8*60*60)
+		if asOf.In(china).Format("2006-01-02") != tradeDate {
+			return "stale"
+		}
+		if now.Sub(asOf) < -30*time.Second {
+			return "stale"
+		}
+		return "historical"
+	default:
+		return "unknown"
+	}
 }
 
 func linkageFreshness(fetchedAt time.Time, maxAge time.Duration, sourceStale bool) string {
@@ -796,12 +933,12 @@ func deriveLinkageContextEvents(previousPayload []byte, current linkageContextSn
 			old, exists := previousATSLeaders[key]
 			if !previousATSReady || !exists {
 				appendEvent("leader.role_changed", "ats.leader|"+key, map[string]any{
-					"symbol": next.Symbol, "sector": next.ThemeID, "theme_id": next.ThemeID,
+					"node_id": next.NodeID, "symbol": next.Symbol, "sector": next.ThemeID, "theme_id": next.ThemeID,
 					"from": nil, "to": next.Role, "source": "ats.leader",
 				})
 			} else if old.Role != next.Role {
 				appendEvent("leader.role_changed", "ats.leader|"+key, map[string]any{
-					"symbol": next.Symbol, "sector": next.ThemeID, "theme_id": next.ThemeID,
+					"node_id": next.NodeID, "symbol": next.Symbol, "sector": next.ThemeID, "theme_id": next.ThemeID,
 					"from": old.Role, "to": next.Role, "source": "ats.leader",
 				})
 			}
@@ -827,13 +964,14 @@ func deriveLinkageContextEvents(previousPayload []byte, current linkageContextSn
 	}
 	oldEvidence := map[string]linkageContextEvidence{}
 	for _, evidence := range previous.Evidence {
-		oldEvidence[evidence.SourceID] = evidence
+		oldEvidence[evidence.NodeID+"|"+evidence.SourceID] = evidence
 	}
 	for _, evidence := range current.Evidence {
-		if evidence.SourceID != "tk.auction" || evidence.TradeDate != current.TradeDate || evidence.Freshness != "fresh" {
+		if evidence.SourceID != "tk.auction" || evidence.TradeDate != current.TradeDate ||
+			(evidence.Freshness != "fresh" && evidence.Freshness != "historical") {
 			continue
 		}
-		old, exists := oldEvidence[evidence.SourceID]
+		old, exists := oldEvidence[evidence.NodeID+"|"+evidence.SourceID]
 		if exists && old.SnapshotID == evidence.SnapshotID {
 			continue
 		}
@@ -841,14 +979,14 @@ func deriveLinkageContextEvents(previousPayload []byte, current linkageContextSn
 		if json.Unmarshal(evidence.Payload, &payload) != nil {
 			continue
 		}
-		appendEvent("auction.confirmed", evidence.SourceID+"|"+evidence.SnapshotID, map[string]any{
+		appendEvent("auction.confirmed", evidence.NodeID+"|"+evidence.SourceID+"|"+evidence.SnapshotID, map[string]any{
 			"source": evidence.SourceID, "snapshot_id": evidence.SnapshotID,
 			"trade_date": evidence.TradeDate, "as_of": evidence.AsOf,
 			"state": payload["state"], "candidate_count": payload["candidate_count"],
 			"candidate_codes": payload["candidate_codes"],
 		})
 	}
-	previousIPOSignals := map[string]bool{}
+	previousIPOSignals := map[string]map[string]bool{}
 	for _, evidence := range previous.Evidence {
 		if evidence.SourceID != "ats.ipo" {
 			continue
@@ -861,12 +999,16 @@ func deriveLinkageContextEvents(previousPayload []byte, current linkageContextSn
 		}
 		for _, signal := range payload.Signals {
 			if signalID, ok := signal["signal_id"].(string); ok && signalID != "" {
-				previousIPOSignals[signalID] = true
+				if previousIPOSignals[evidence.NodeID] == nil {
+					previousIPOSignals[evidence.NodeID] = map[string]bool{}
+				}
+				previousIPOSignals[evidence.NodeID][signalID] = true
 			}
 		}
 	}
 	for _, evidence := range current.Evidence {
-		if evidence.SourceID != "ats.ipo" || evidence.TradeDate != current.TradeDate || evidence.Freshness != "fresh" {
+		if evidence.SourceID != "ats.ipo" || evidence.TradeDate != current.TradeDate ||
+			(evidence.Freshness != "fresh" && evidence.Freshness != "historical") {
 			continue
 		}
 		var payload struct {
@@ -877,13 +1019,13 @@ func deriveLinkageContextEvents(previousPayload []byte, current linkageContextSn
 		}
 		for _, signal := range payload.Signals {
 			signalID, ok := signal["signal_id"].(string)
-			if !ok || signalID == "" || previousIPOSignals[signalID] {
+			if !ok || signalID == "" || previousIPOSignals[evidence.NodeID][signalID] {
 				continue
 			}
-			appendEvent("ipo.signal_observed", evidence.SourceID+"|"+signalID, signal)
+			appendEvent("ipo.signal_observed", evidence.NodeID+"|"+evidence.SourceID+"|"+signalID, signal)
 		}
 	}
-	previousAnomalyEvents := map[string]bool{}
+	previousAnomalyEvents := map[string]map[string]bool{}
 	for _, evidence := range previous.Evidence {
 		if evidence.SourceID != "tk.anomaly" {
 			continue
@@ -896,12 +1038,16 @@ func deriveLinkageContextEvents(previousPayload []byte, current linkageContextSn
 		}
 		for _, event := range payload.Events {
 			if eventID, ok := event["event_id"].(string); ok && eventID != "" {
-				previousAnomalyEvents[eventID] = true
+				if previousAnomalyEvents[evidence.NodeID] == nil {
+					previousAnomalyEvents[evidence.NodeID] = map[string]bool{}
+				}
+				previousAnomalyEvents[evidence.NodeID][eventID] = true
 			}
 		}
 	}
 	for _, evidence := range current.Evidence {
-		if evidence.SourceID != "tk.anomaly" || evidence.TradeDate != current.TradeDate || evidence.Freshness != "fresh" {
+		if evidence.SourceID != "tk.anomaly" || evidence.TradeDate != current.TradeDate ||
+			(evidence.Freshness != "fresh" && evidence.Freshness != "historical") {
 			continue
 		}
 		var payload struct {
@@ -913,10 +1059,10 @@ func deriveLinkageContextEvents(previousPayload []byte, current linkageContextSn
 		for _, event := range payload.Events {
 			eventID, ok := event["event_id"].(string)
 			tradeDate, dated := event["trade_date"].(string)
-			if !ok || eventID == "" || !dated || tradeDate != current.TradeDate || previousAnomalyEvents[eventID] {
+			if !ok || eventID == "" || !dated || tradeDate != current.TradeDate || previousAnomalyEvents[evidence.NodeID][eventID] {
 				continue
 			}
-			appendEvent("anomaly.detected", eventID, event)
+			appendEvent("anomaly.detected", evidence.NodeID+"|"+eventID, event)
 		}
 	}
 	return events
@@ -955,13 +1101,16 @@ func contextRanks(stocks []linkageHeatStock) map[string]contextRank {
 	return ranks
 }
 
-type contextRole struct{ Symbol, ThemeID, Source, Role string }
+type contextRole struct{ NodeID, Symbol, ThemeID, Source, Role string }
 
 func atsLeaderEvidenceRoles(snapshot linkageContextSnapshot) (map[string]contextRole, bool) {
+	roles := make(map[string]contextRole)
+	found := false
 	for _, evidence := range snapshot.Evidence {
 		if evidence.SourceID != "ats.leader" {
 			continue
 		}
+		found = true
 		if evidence.TradeDate != snapshot.TradeDate || evidence.Freshness != "fresh" {
 			return nil, false
 		}
@@ -976,7 +1125,6 @@ func atsLeaderEvidenceRoles(snapshot linkageContextSnapshot) (map[string]context
 		if json.Unmarshal(evidence.Payload, &payload) != nil || payload.SourceFreshness != "fresh" {
 			return nil, false
 		}
-		roles := make(map[string]contextRole, len(payload.Roles))
 		for _, item := range payload.Roles {
 			symbol := canonicalLinkageSymbol(item.Symbol)
 			role := strings.TrimSpace(item.Role)
@@ -984,12 +1132,11 @@ func atsLeaderEvidenceRoles(snapshot linkageContextSnapshot) (map[string]context
 			if symbol == "" || role == "" {
 				continue
 			}
-			key := symbol + "|" + sector
-			roles[key] = contextRole{Symbol: symbol, ThemeID: sector, Source: "ats.leader", Role: role}
+			key := evidence.NodeID + "|" + symbol + "|" + sector
+			roles[key] = contextRole{NodeID: evidence.NodeID, Symbol: symbol, ThemeID: sector, Source: "ats.leader", Role: role}
 		}
-		return roles, true
 	}
-	return nil, false
+	return roles, found
 }
 
 func contextRoles(themes []linkageTheme) map[string]contextRole {

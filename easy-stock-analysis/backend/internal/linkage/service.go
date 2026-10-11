@@ -885,6 +885,30 @@ func (s *Service) requestContext(ctx context.Context, target Target, method, pat
 	return data, response.StatusCode, err
 }
 
+func (s *Service) HasWorkspace(workspaceID string) bool {
+	if strings.TrimSpace(workspaceID) == "" {
+		return false
+	}
+	s.targetMu.RLock()
+	defer s.targetMu.RUnlock()
+	for _, target := range s.targets {
+		if target.WorkspaceID == workspaceID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) LatestContextSnapshotForWorkspace(ctx context.Context, workspaceID string) ([]byte, error) {
+	var payload []byte
+	err := s.db.QueryRowContext(ctx,
+		`SELECT payload FROM linkage_context_snapshots
+		 WHERE json_extract(CAST(payload AS TEXT),'$.workspace_id')=?
+		 ORDER BY created_at DESC,snapshot_id DESC LIMIT 1`, workspaceID,
+	).Scan(&payload)
+	return payload, err
+}
+
 func (s *Service) LatestContextSnapshot(ctx context.Context) ([]byte, error) {
 	var payload []byte
 	err := s.db.QueryRowContext(ctx,
@@ -990,6 +1014,34 @@ func (s *Service) RecentContextEvidence(ctx context.Context) ([]ContextEvidence,
 	return evidence, rows.Err()
 }
 
+func (s *Service) RecentContextEvidenceForWorkspace(ctx context.Context, workspaceID string) ([]ContextEvidence, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT current.workspace_id,current.node_id,current.source_id,current.snapshot_id,
+		current.trade_date,current.as_of,current.received_at,current.payload
+		FROM linkage_context_evidence AS current
+		WHERE current.workspace_id=? AND current.snapshot_id IN (
+			SELECT recent.snapshot_id FROM linkage_context_evidence AS recent
+			WHERE recent.workspace_id=current.workspace_id AND recent.node_id=current.node_id AND recent.source_id=current.source_id
+			ORDER BY recent.trade_date DESC,recent.as_of DESC,recent.received_at DESC LIMIT 500
+		)
+		ORDER BY current.source_id,current.node_id,current.trade_date,current.as_of,current.received_at`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	evidence := make([]ContextEvidence, 0)
+	for rows.Next() {
+		var item ContextEvidence
+		var payload []byte
+		if err := rows.Scan(&item.WorkspaceID, &item.NodeID, &item.SourceID, &item.SnapshotID,
+			&item.TradeDate, &item.AsOf, &item.ReceivedAt, &payload); err != nil {
+			return nil, err
+		}
+		item.Payload = json.RawMessage(payload)
+		evidence = append(evidence, item)
+	}
+	return evidence, rows.Err()
+}
+
 func (s *Service) StoreContextSnapshot(ctx context.Context, snapshotID, tradeDate string, payload []byte, events []ContextEvent) error {
 	if snapshotID == "" || len(payload) == 0 || len(payload) > 8<<20 {
 		return errors.New("invalid_context_snapshot")
@@ -1018,22 +1070,24 @@ func (s *Service) StoreContextSnapshot(ctx context.Context, snapshotID, tradeDat
 			return err
 		}
 	}
-	_, err = tx.ExecContext(ctx,
-		`DELETE FROM linkage_context_snapshots WHERE created_at < ?`, time.Now().UTC().Add(-30*24*time.Hour).Format(time.RFC3339Nano),
-	)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx,
-		`DELETE FROM linkage_context_snapshots WHERE snapshot_id NOT IN (
-			SELECT snapshot_id FROM linkage_context_snapshots ORDER BY created_at DESC,snapshot_id DESC LIMIT 1000
-		)`,
-	)
-	if err != nil {
-		return err
-	}
+	// Expire events before snapshots; retained events keep their replay dependencies.
 	_, err = tx.ExecContext(ctx,
 		`DELETE FROM linkage_context_events WHERE occurred_at < ?`, time.Now().UTC().Add(-90*24*time.Hour).Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx,
+		`DELETE FROM linkage_context_snapshots
+		WHERE (created_at < ? OR snapshot_id NOT IN (
+			SELECT snapshot_id FROM linkage_context_snapshots ORDER BY created_at DESC,snapshot_id DESC LIMIT 1000
+		)) AND NOT EXISTS (
+			SELECT 1 FROM linkage_context_events AS event
+			WHERE event.causation_id=linkage_context_snapshots.snapshot_id OR EXISTS (
+				SELECT 1 FROM json_each(event.source_snapshot_ids) AS reference
+				WHERE reference.value=linkage_context_snapshots.snapshot_id
+			)
+		)`, time.Now().UTC().Add(-30*24*time.Hour).Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return err
@@ -1069,6 +1123,81 @@ func (s *Service) ContextEvents(ctx context.Context, after string, limit int) ([
 		var event ContextEvent
 		var sources string
 		if err := rows.Scan(&event.EventID, &event.EventType, &event.OriginNode, &event.CausationID, &sources, &event.TradeDate, &event.OccurredAt, &event.Payload); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(sources), &event.SourceSnapshotIDs); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+func (s *Service) ContextEventsForWorkspace(ctx context.Context, workspaceID, after string, limit int) ([]ContextEvent, error) {
+	if limit < 1 || limit > 500 {
+		limit = 100
+	}
+	scope := `EXISTS (SELECT 1 FROM linkage_context_snapshots AS snapshot
+		WHERE snapshot.snapshot_id=event.causation_id
+		AND json_extract(CAST(snapshot.payload AS TEXT),'$.workspace_id')=?)`
+	query := `SELECT event.event_id,event.event_type,event.origin_node,event.causation_id,event.source_snapshot_ids,
+		event.trade_date,event.occurred_at,event.payload FROM linkage_context_events AS event WHERE ` + scope +
+		` ORDER BY event.occurred_at,event.event_id LIMIT ?`
+	args := []any{workspaceID, limit}
+	if after != "" {
+		var cursorTime string
+		err := s.db.QueryRowContext(ctx, `SELECT event.occurred_at FROM linkage_context_events AS event
+			WHERE event.event_id=? AND `+scope, after, workspaceID).Scan(&cursorTime)
+		if err == nil {
+			query = `SELECT event.event_id,event.event_type,event.origin_node,event.causation_id,event.source_snapshot_ids,
+				event.trade_date,event.occurred_at,event.payload FROM linkage_context_events AS event
+				WHERE ` + scope + ` AND (event.occurred_at>? OR (event.occurred_at=? AND event.event_id>?))
+				ORDER BY event.occurred_at,event.event_id LIMIT ?`
+			args = []any{workspaceID, cursorTime, cursorTime, after, limit}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanContextEvents(rows, limit)
+}
+
+func (s *Service) LatestContextEventsForWorkspace(ctx context.Context, workspaceID string, limit int) ([]ContextEvent, error) {
+	if limit < 1 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT event.event_id,event.event_type,event.origin_node,event.causation_id,
+		event.source_snapshot_ids,event.trade_date,event.occurred_at,event.payload
+		FROM linkage_context_events AS event
+		WHERE EXISTS (SELECT 1 FROM linkage_context_snapshots AS snapshot
+			WHERE snapshot.snapshot_id=event.causation_id
+			AND json_extract(CAST(snapshot.payload AS TEXT),'$.workspace_id')=?)
+		ORDER BY event.occurred_at DESC,event.event_id DESC LIMIT ?`, workspaceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events, err := scanContextEvents(rows, limit)
+	if err != nil {
+		return nil, err
+	}
+	for left, right := 0, len(events)-1; left < right; left, right = left+1, right-1 {
+		events[left], events[right] = events[right], events[left]
+	}
+	return events, nil
+}
+
+func scanContextEvents(rows *sql.Rows, limit int) ([]ContextEvent, error) {
+	events := make([]ContextEvent, 0, limit)
+	for rows.Next() {
+		var event ContextEvent
+		var sources string
+		if err := rows.Scan(&event.EventID, &event.EventType, &event.OriginNode, &event.CausationID,
+			&sources, &event.TradeDate, &event.OccurredAt, &event.Payload); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(sources), &event.SourceSnapshotIDs); err != nil {

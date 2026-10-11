@@ -2,7 +2,10 @@ package httpapi
 
 import (
 	"encoding/json"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"easy-stock/backend/internal/foundation"
 	"easy-stock/backend/internal/linkage"
@@ -48,7 +51,7 @@ func TestMergeLinkageEvidencePreservesStaleATSLeaderState(t *testing.T) {
 	}
 }
 
-func TestMergeLinkageEvidenceMarksSameTradeDateCurrent(t *testing.T) {
+func TestMergeLinkageEvidenceKeepsAuctionHistoricalAfterSession(t *testing.T) {
 	snapshot := linkageContextSnapshot{TradeDate: "2026-10-10", Sources: []linkageContextSource{}}
 	evidence := []linkage.ContextEvidence{{
 		WorkspaceID: "desk", NodeID: "tk-1", SourceID: "tk.auction", SnapshotID: "auction-1",
@@ -56,9 +59,51 @@ func TestMergeLinkageEvidenceMarksSameTradeDateCurrent(t *testing.T) {
 		Payload: json.RawMessage(`{"schema_version":1,"source_id":"tk.auction","state":"NEUTRAL"}`),
 	}}
 
-	merged := mergeLinkageContextEvidence(snapshot, evidence)
+	morning := time.Date(2026, 10, 10, 1, 26, 0, 0, time.UTC)
+	merged := mergeLinkageContextEvidenceAt(snapshot, evidence, morning)
 	if len(merged.Evidence) != 1 || merged.Evidence[0].Freshness != "fresh" {
-		t.Fatalf("same-day auction evidence freshness = %+v", merged.Evidence)
+		t.Fatalf("auction during opening session freshness = %+v", merged.Evidence)
+	}
+	afternoon := time.Date(2026, 10, 10, 6, 0, 0, 0, time.UTC)
+	merged = mergeLinkageContextEvidenceAt(snapshot, evidence, afternoon)
+	if len(merged.Evidence) != 1 || merged.Evidence[0].Freshness != "historical" {
+		t.Fatalf("same-day afternoon auction evidence freshness = %+v", merged.Evidence)
+	}
+}
+
+func TestATSLeaderEvidenceUsesSourceAgeAndRejectsUnknownSources(t *testing.T) {
+	now := time.Date(2026, 10, 10, 1, 30, 0, 0, time.UTC)
+	freshPayload := json.RawMessage(`{"source_freshness":"fresh"}`)
+	item := linkage.ContextEvidence{SourceID: "ats.leader", TradeDate: "2026-10-10",
+		AsOf: now.Add(-45 * time.Second).Format(time.RFC3339Nano), Payload: freshPayload}
+	if got := linkageEvidenceFreshness(item, "2026-10-10", now); got != "fresh" {
+		t.Fatalf("45-second ATS evidence freshness = %q, want fresh", got)
+	}
+	item.AsOf = now.Add(-91 * time.Second).Format(time.RFC3339Nano)
+	if got := linkageEvidenceFreshness(item, "2026-10-10", now); got != "stale" {
+		t.Fatalf("91-second ATS evidence freshness = %q, want stale", got)
+	}
+	item.AsOf = now.Add(31 * time.Second).Format(time.RFC3339Nano)
+	if got := linkageEvidenceFreshness(item, "2026-10-10", now); got != "stale" {
+		t.Fatalf("future ATS evidence freshness = %q, want stale", got)
+	}
+	item.AsOf = "not-a-time"
+	if got := linkageEvidenceFreshness(item, "2026-10-10", now); got != "unknown" {
+		t.Fatalf("invalid ATS as_of freshness = %q, want unknown", got)
+	}
+	item.SourceID = "ats.ipo"
+	item.AsOf = now.Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	if got := linkageEvidenceFreshness(item, "2026-10-10", now); got != "historical" {
+		t.Fatalf("same-day IPO event freshness = %q, want historical", got)
+	}
+	item.AsOf = now.Add(31 * time.Second).Format(time.RFC3339Nano)
+	if got := linkageEvidenceFreshness(item, "2026-10-10", now); got != "stale" {
+		t.Fatalf("future IPO event freshness = %q, want stale", got)
+	}
+	item.SourceID = "other.unknown"
+	item.AsOf = now.Format(time.RFC3339Nano)
+	if got := linkageEvidenceFreshness(item, "2026-10-10", now); got != "unknown" {
+		t.Fatalf("unrecognized evidence freshness = %q, want unknown", got)
 	}
 }
 
@@ -359,5 +404,77 @@ func TestTKAnomalyEvidenceHistoryEmitsNewSameDayEventsOnly(t *testing.T) {
 	}
 	if err := json.Unmarshal(merged.Evidence[0].Payload, &aggregate); err != nil || len(aggregate.Events) != 2 {
 		t.Fatalf("anomaly history was not retained: events=%+v err=%v", aggregate.Events, err)
+	}
+}
+
+func TestMergeLinkageEvidencePreservesSameSourceFromDifferentNodes(t *testing.T) {
+	snapshot := linkageContextSnapshot{TradeDate: "2026-10-11", Sources: []linkageContextSource{}}
+	stored := []linkage.ContextEvidence{
+		{WorkspaceID: "desk", NodeID: "tk-a", SourceID: "tk.auction", SnapshotID: "auction-a",
+			TradeDate: "2026-10-11", AsOf: "2026-10-11T09:20:00+08:00", ReceivedAt: "2026-10-11T09:20:01+08:00",
+			Payload: json.RawMessage("{\"state\":\"NEUTRAL\"}")},
+		{WorkspaceID: "desk", NodeID: "tk-b", SourceID: "tk.auction", SnapshotID: "auction-b",
+			TradeDate: "2026-10-11", AsOf: "2026-10-11T09:21:00+08:00", ReceivedAt: "2026-10-11T09:21:01+08:00",
+			Payload: json.RawMessage("{\"state\":\"STRONG\"}")},
+	}
+	merged := mergeLinkageContextEvidence(snapshot, stored)
+	if len(merged.Evidence) != 2 || merged.Evidence[0].NodeID != "tk-a" || merged.Evidence[1].NodeID != "tk-b" {
+		t.Fatalf("same source evidence was collapsed across nodes: %+v", merged.Evidence)
+	}
+	if len(merged.Sources) != 2 || merged.Sources[0].ID == merged.Sources[1].ID {
+		t.Fatalf("same source summaries lack stable node identities: %+v", merged.Sources)
+	}
+}
+
+func TestLinkageContextWorkspaceRequiresConfiguredPeerOrWorkspace(t *testing.T) {
+	service, err := linkage.NewService(filepath.Join(t.TempDir(), "linkage.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	request := httptest.NewRequest("GET", "/api/v1/linkage/context", nil)
+	if workspace, ok := linkageContextWorkspace(request, service); !ok || workspace != "" {
+		t.Fatalf("public unscoped request should remain valid: workspace=%q ok=%v", workspace, ok)
+	}
+	request = httptest.NewRequest("GET", "/api/v1/linkage/context?workspace_id=foreign", nil)
+	if _, ok := linkageContextWorkspace(request, service); ok {
+		t.Fatal("unknown workspace was accepted")
+	}
+}
+
+func TestATSLeaderEventsRemainDistinctAcrossNodes(t *testing.T) {
+	previous := linkageContextSnapshot{SchemaVersion: 1, SnapshotID: "context-1", TradeDate: "2026-10-11",
+		Evidence: []linkageContextEvidence{
+			{SourceID: "ats.leader", NodeID: "ats-a", SnapshotID: "a-1", TradeDate: "2026-10-11", Freshness: "fresh",
+				Payload: json.RawMessage("{\"source_freshness\":\"fresh\",\"roles\":[{\"symbol\":\"600000.SH\",\"role\":\"leader\",\"sector\":\"bank\"}]}")},
+			{SourceID: "ats.leader", NodeID: "ats-b", SnapshotID: "b-1", TradeDate: "2026-10-11", Freshness: "fresh",
+				Payload: json.RawMessage("{\"source_freshness\":\"fresh\",\"roles\":[{\"symbol\":\"600000.SH\",\"role\":\"candidate\",\"sector\":\"bank\"}]}")},
+		}}
+	previousJSON, err := json.Marshal(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := previous
+	current.SnapshotID = "context-2"
+	current.Evidence = append([]linkageContextEvidence(nil), previous.Evidence...)
+	for i := range current.Evidence {
+		current.Evidence[i].SnapshotID += "-next"
+	}
+	current.Evidence[0].Payload = json.RawMessage("{\"source_freshness\":\"fresh\",\"roles\":[{\"symbol\":\"600000.SH\",\"role\":\"core_leader\",\"sector\":\"bank\"}]}")
+	current.Evidence[1].Payload = json.RawMessage("{\"source_freshness\":\"fresh\",\"roles\":[{\"symbol\":\"600000.SH\",\"role\":\"rising\",\"sector\":\"bank\"}]}")
+	events := deriveLinkageContextEvents(previousJSON, current)
+	seen := map[string]bool{}
+	for _, event := range events {
+		if event.EventType != "leader.role_changed" {
+			continue
+		}
+		var payload map[string]string
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		seen[payload["node_id"]] = true
+	}
+	if len(seen) != 2 || !seen["ats-a"] || !seen["ats-b"] {
+		t.Fatalf("same-source leader transitions collapsed across nodes: events=%+v", events)
 	}
 }

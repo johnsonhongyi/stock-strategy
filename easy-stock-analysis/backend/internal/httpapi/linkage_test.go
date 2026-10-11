@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"easy-stock/backend/internal/linkage"
 )
@@ -29,12 +31,12 @@ func TestLinkageEventsLatestRouteReturnsNewestInChronologicalOrder(t *testing.T)
 	defer server.Close()
 
 	events := []linkage.ContextEvent{
-		{EventID: "event-1", EventType: "heat.rank_changed", TradeDate: "2026-10-10", OccurredAt: "2026-10-10T01:00:00Z", Payload: json.RawMessage(`{"symbol":"600000.SH"}`)},
-		{EventID: "event-2", EventType: "heat.rank_changed", TradeDate: "2026-10-10", OccurredAt: "2026-10-10T01:01:00Z", Payload: json.RawMessage(`{"symbol":"600000.SH"}`)},
-		{EventID: "event-3", EventType: "heat.rank_changed", TradeDate: "2026-10-10", OccurredAt: "2026-10-10T01:02:00Z", Payload: json.RawMessage(`{"symbol":"600000.SH"}`)},
+		{EventID: "event-1", EventType: "heat.rank_changed", CausationID: "snapshot-1", TradeDate: "2026-10-10", OccurredAt: "2026-10-10T01:00:00Z", Payload: json.RawMessage(`{"symbol":"600000.SH"}`)},
+		{EventID: "event-2", EventType: "heat.rank_changed", CausationID: "snapshot-1", TradeDate: "2026-10-10", OccurredAt: "2026-10-10T01:01:00Z", Payload: json.RawMessage(`{"symbol":"600000.SH"}`)},
+		{EventID: "event-3", EventType: "heat.rank_changed", CausationID: "snapshot-1", TradeDate: "2026-10-10", OccurredAt: "2026-10-10T01:02:00Z", Payload: json.RawMessage(`{"symbol":"600000.SH"}`)},
 	}
 	if err := service.StoreContextSnapshot(context.Background(), "snapshot-1", "2026-10-10",
-		[]byte(`{"schema_version":1,"snapshot_id":"snapshot-1"}`), events); err != nil {
+		[]byte(`{"schema_version":1,"workspace_id":"","snapshot_id":"snapshot-1"}`), events); err != nil {
 		t.Fatal(err)
 	}
 
@@ -206,7 +208,8 @@ func TestLinkageSetupImportWithoutTokenCompletesTKHandshake(t *testing.T) {
 }
 
 func TestLinkageAttentionRoutesRequireAuthAndPersistIntent(t *testing.T) {
-	server := NewServer(Config{Token: "test-token"})
+	provider := newFixedStockDirectoryProvider("600000.SH", "000001.SZ")
+	server := NewServer(Config{Token: "test-token", StockDirectory: provider})
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "key.bin"), []byte(strings.Repeat("k", 32)), 0600); err != nil {
 		t.Fatal(err)
@@ -240,6 +243,28 @@ func TestLinkageAttentionRoutesRequireAuthAndPersistIntent(t *testing.T) {
 		t.Fatalf("intent response = %d %s", response.Code, response.Body.String())
 	}
 
+	for _, invalid := range []struct {
+		intentID string
+		symbol   string
+	}{
+		{intentID: "intent-etf", symbol: "510300.SH"},
+		{intentID: "intent-wrong-exchange", symbol: "600000.SZ"},
+		{intentID: "intent-unknown-stock", symbol: "600999.SH"},
+		{intentID: "intent-index", symbol: "399001.SZ"},
+		{intentID: "intent-b-share-sh", symbol: "900901.SH"},
+		{intentID: "intent-b-share-sz", symbol: "200001.SZ"},
+	} {
+		invalidBody := `{"intent_id":"` + invalid.intentID + `","workspace_id":"desk","node_id":"tk-1","symbol":"` +
+			invalid.symbol + `","source":"stock-strategy:sbc","action":"add","base_revision":1}`
+		invalidRequest := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/attention/intents", strings.NewReader(invalidBody))
+		invalidRequest.Header.Set("Authorization", "Bearer test-token")
+		invalidResponse := httptest.NewRecorder()
+		server.ServeHTTP(invalidResponse, invalidRequest)
+		if invalidResponse.Code != http.StatusBadRequest || !strings.Contains(invalidResponse.Body.String(), "unsupported_symbol") {
+			t.Fatalf("invalid stock %s response = %d %s", invalid.symbol, invalidResponse.Code, invalidResponse.Body.String())
+		}
+	}
+
 	request = httptest.NewRequest(http.MethodGet,
 		"/api/v1/linkage/attention?workspace_id=desk&node_id=tk-1", nil)
 	request.Header.Set("Authorization", "Bearer test-token")
@@ -257,6 +282,79 @@ func TestLinkageAttentionRoutesRequireAuthAndPersistIntent(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "stock-strategy:sbc") ||
 		!strings.Contains(response.Body.String(), `"node_id":"ats-1"`) {
 		t.Fatalf("cross-node snapshot response = %d %s", response.Code, response.Body.String())
+	}
+
+	server.stockDirectories.mu.Lock()
+	server.stockDirectories.snapshot.expiresAt = time.Now().Add(-time.Second)
+	server.stockDirectories.mu.Unlock()
+	provider.err = errors.New("catalog offline")
+	staleBody := `{"intent_id":"intent-stale-catalog","workspace_id":"desk","node_id":"tk-1","symbol":"000001.SZ","source":"stock-strategy:sbc","action":"add","base_revision":1}`
+	staleRequest := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/attention/intents", strings.NewReader(staleBody))
+	staleRequest.Header.Set("Authorization", "Bearer test-token")
+	staleResponse := httptest.NewRecorder()
+	server.ServeHTTP(staleResponse, staleRequest)
+	if staleResponse.Code != http.StatusServiceUnavailable || !strings.Contains(staleResponse.Body.String(), "stock_directory_stale") {
+		t.Fatalf("stale directory response = %d %s", staleResponse.Code, staleResponse.Body.String())
+	}
+
+	command := linkage.Command{
+		SchemaVersion: 1, Type: "WATCHLIST_ADD", RequestID: "cmd-etf", OperationID: "op-etf",
+		WorkspaceID: "desk", TargetNodeIDs: []string{"tk-1"}, Symbol: "510300.SH",
+		InstrumentType: "stock", Source: "stock-strategy.manual",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339), ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
+	}
+	commandBody, err := json.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandRequest := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/commands", bytes.NewReader(commandBody))
+	commandRequest.Header.Set("Authorization", "Bearer test-token")
+	commandResponse := httptest.NewRecorder()
+	server.ServeHTTP(commandResponse, commandRequest)
+	if commandResponse.Code != http.StatusBadRequest || !strings.Contains(commandResponse.Body.String(), "unsupported_symbol") {
+		t.Fatalf("ETF watchlist command response = %d %s", commandResponse.Code, commandResponse.Body.String())
+	}
+}
+
+func TestLinkageAttentionBatchAllowsRemovingOutOfCatalogStock(t *testing.T) {
+	server := NewServer(Config{Token: "test-token", StockDirectory: newFixedStockDirectoryProvider("600000.SH")})
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "key.bin"), []byte(strings.Repeat("k", 32)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	targetsPath := filepath.Join(root, "targets.json")
+	targets := `{"targets":[{"node_id":"tk-1","workspace_id":"desk","label":"TK desktop","base_url":"http://127.0.0.1:26676","key_file":"key.bin","enabled":true}]}`
+	if err := os.WriteFile(targetsPath, []byte(targets), 0600); err != nil {
+		t.Fatal(err)
+	}
+	service, err := linkage.NewService(filepath.Join(root, "linkage.db"), targetsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.linkage = service
+	defer server.Close()
+	if _, err := service.ApplyAttentionIntent(context.Background(), linkage.AttentionIntent{
+		IntentID: "seed-old-etf", WorkspaceID: "desk", NodeID: "tk-1", Symbol: "510300.SH",
+		Source: "manual", Action: "add", BaseRevision: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	invalidAdd := `{"workspace_id":"desk","node_id":"tk-1","base_revision":1,"intents":[{"intent_id":"reject-new-etf","symbol":"510300.SH","source":"manual","action":"add"}]}`
+	invalidRequest := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/attention/intents/batch", strings.NewReader(invalidAdd))
+	invalidRequest.Header.Set("Authorization", "Bearer test-token")
+	invalidResponse := httptest.NewRecorder()
+	server.ServeHTTP(invalidResponse, invalidRequest)
+	if invalidResponse.Code != http.StatusOK || !strings.Contains(invalidResponse.Body.String(), "unsupported_symbol") {
+		t.Fatalf("batch ETF add response = %d %s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+
+	body := `{"workspace_id":"desk","node_id":"tk-1","base_revision":1,"intents":[{"intent_id":"remove-old-etf","symbol":"510300.SH","source":"manual","action":"remove_all"}]}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/linkage/attention/intents/batch", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), `"errors":[{`) {
+		t.Fatalf("out-of-catalog removal response = %d %s", response.Code, response.Body.String())
 	}
 }
 

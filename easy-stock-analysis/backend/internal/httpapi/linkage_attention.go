@@ -60,6 +60,16 @@ func (s *Server) linkageAttentionIntent(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusForbidden, "attention target is not configured for this workspace")
 		return
 	}
+	if strings.EqualFold(strings.TrimSpace(intent.Action), "add") {
+		if validationErr := s.validateStockDirectorySymbol(r.Context(), intent.Symbol); validationErr != nil {
+			status := http.StatusBadRequest
+			if strings.HasPrefix(validationErr.Error(), "stock_directory_") {
+				status = http.StatusServiceUnavailable
+			}
+			writeError(w, status, validationErr.Error())
+			return
+		}
+	}
 	result, err := s.linkage.ApplyAttentionIntent(r.Context(), intent)
 	if err != nil {
 		switch {
@@ -118,6 +128,12 @@ func (s *Server) linkageAttentionBatch(w http.ResponseWriter, r *http.Request) {
 	failed := make([]map[string]string, 0)
 	revision := snapshot.Revision
 	for _, item := range batch.Intents {
+		if strings.EqualFold(strings.TrimSpace(item.Action), "add") {
+			if validationErr := s.validateStockDirectorySymbol(r.Context(), item.Symbol); validationErr != nil {
+				failed = append(failed, map[string]string{"intent_id": item.IntentID, "code": validationErr.Error()})
+				continue
+			}
+		}
 		intent := linkage.AttentionIntent{IntentID: item.IntentID, WorkspaceID: batch.WorkspaceID,
 			NodeID: batch.NodeID, Symbol: item.Symbol, Source: item.Source, Action: item.Action,
 			BaseRevision: revision}

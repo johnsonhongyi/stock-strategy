@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -16,6 +17,29 @@ type countingStockDirectoryProvider struct {
 	calls atomic.Int32
 }
 
+type fixedStockDirectoryProvider struct {
+	catalog []foundation.StockCatalogEntry
+	err     error
+}
+
+func (provider *fixedStockDirectoryProvider) StockCatalog(context.Context) ([]foundation.StockCatalogEntry, error) {
+	if provider.err != nil {
+		return nil, provider.err
+	}
+	return append([]foundation.StockCatalogEntry(nil), provider.catalog...), nil
+}
+
+func newFixedStockDirectoryProvider(symbols ...string) *fixedStockDirectoryProvider {
+	meta := foundation.SourceMeta{Source: "test:stock-directory", FetchedAt: time.Now()}
+	provider := &fixedStockDirectoryProvider{}
+	for _, symbol := range symbols {
+		provider.catalog = append(provider.catalog, foundation.StockCatalogEntry{
+			BoardStock: foundation.BoardStock{Symbol: symbol, Name: symbol, Meta: meta},
+		})
+	}
+	return provider
+}
+
 func (provider *countingStockDirectoryProvider) StockCatalog(context.Context) ([]foundation.StockCatalogEntry, error) {
 	provider.calls.Add(1)
 	meta := foundation.SourceMeta{Source: "test:stock-directory", FetchedAt: time.Date(2026, 8, 9, 9, 30, 0, 0, time.Local)}
@@ -25,6 +49,14 @@ func (provider *countingStockDirectoryProvider) StockCatalog(context.Context) ([
 		{BoardStock: foundation.BoardStock{Symbol: "600519.SH", Name: "重复项", Meta: meta}},
 		{BoardStock: foundation.BoardStock{Symbol: "", Name: "无效项", Meta: meta}},
 	}, nil
+}
+
+func TestStockDirectoryValidationFailsClosedWhenProviderIsUnavailable(t *testing.T) {
+	server := NewServer(Config{StockDirectory: &fixedStockDirectoryProvider{err: errors.New("offline")}})
+	defer server.Close()
+	if err := server.validateStockDirectorySymbol(context.Background(), "600000.SH"); err == nil || err.Error() != "stock_directory_unavailable" {
+		t.Fatalf("validation error = %v, want stock_directory_unavailable", err)
+	}
 }
 
 func TestStockDirectoryCachesNamesAndCodes(t *testing.T) {

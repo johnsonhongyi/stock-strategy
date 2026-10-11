@@ -1,8 +1,8 @@
-import { linkageOperationRefreshDelay } from "../lib/linkage";
+import { linkageContextTTL, linkageOperationRefreshDelay } from "../lib/linkage";
 import { useEffect, useMemo, useState } from 'react';
 import { BackendRequestError, type BackendConfig } from '../lib/backend';
 import {
-	canReplayWatchlistAddCommand, createLinkageAttentionIntent, createWatchlistAddCommand, getLatestLinkageEvents, getLinkageAttention, getLinkageContext, getLinkageOperation, listLinkageTargets,
+	canReplayWatchlistAddCommand, createLinkageAttentionIntent, createWatchlistAddCommand, getLatestLinkageEvents, getLinkageAttention, getLinkageContext, getLinkageOperation, isLinkageOperationSettled as isSettled, listLinkageTargets, normalizeLinkageStockSymbol,
 	isLinkageAttentionIntentSatisfied, SBC_WATCHLIST_SOURCE,
 	submitLinkageAttentionIntent, submitWatchlistAdd, type LinkageAttentionIntent, type LinkageAttentionSnapshot, type LinkageContextEvent, type LinkageContextSnapshot, type LinkageOperation, type LinkageTarget, type WatchlistAddCommand,
 } from '../lib/linkage';
@@ -12,16 +12,6 @@ type Props = {
 	symbol: string;
 	tradeDate?: string;
 };
-
-function normalizeSymbol(value: string) {
-	const normalized = value.trim().toUpperCase();
-	if (/^\d{6}\.(SH|SZ)$/.test(normalized)) return normalized;
-	if (!/^\d{1,6}$/.test(normalized)) return '';
-	const code = normalized.padStart(6, '0');
-	if (/^(600|601|603|605|688|689)/.test(code)) return `${code}.SH`;
-	if (/^(000|001|002|003|300|301)/.test(code)) return `${code}.SZ`;
-	return '';
-}
 
 function consumerStatus(operation: LinkageOperation | null, consumer: 'TK' | 'ATS') {
 	for (const delivery of operation?.deliveries || []) {
@@ -39,20 +29,6 @@ function savedStatus(operation: LinkageOperation | null) {
 	return statuses.map((status) => status === 'already_present' ? '已在关注' : status === 'applied' ? '已保存' : status).join('，');
 }
 
-function isSettled(operation: LinkageOperation | null) {
-	if (!operation?.deliveries?.length) return false;
-	return operation.deliveries.every((delivery) => {
-		const desktopStatus = delivery.result?.status;
-		if (['rejected', 'expired', 'failed'].includes(desktopStatus || '')
-			|| ['rejected', 'expired', 'failed'].includes(delivery.status)) return true;
-		const saved = delivery.result?.result?.saved?.persisted;
-		const consumers = delivery.result?.result?.consumers || {};
-		return Boolean(saved) && ['TK', 'ATS'].every((consumer) =>
-			['synced', 'not_running', 'error'].includes(consumers[consumer]?.status || ''),
-		);
-	});
-}
-
 function storageKey(symbol: string) { return `watchlist-linkage:${symbol}`; }
 function attentionStorageKey(workspaceID: string, nodeID: string, symbol: string, source: string, action: string) {
 	return `watchlist-attention:${workspaceID}:${nodeID}:${symbol}:${source}:${action}`;
@@ -65,7 +41,7 @@ function attentionSourceLabel(source: string) {
 }
 
 export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
-	const normalizedSymbol = useMemo(() => normalizeSymbol(symbol), [symbol]);
+	const normalizedSymbol = useMemo(() => normalizeLinkageStockSymbol(symbol), [symbol]);
 	const [targets, setTargets] = useState<LinkageTarget[]>([]);
 	const [selectedNode, setSelectedNode] = useState('');
 	const selectedTarget = targets.find((item) => item.node_id === selectedNode);
@@ -74,6 +50,7 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 	const [attention, setAttention] = useState<LinkageAttentionSnapshot | null>(null);
 	const [pendingAttention, setPendingAttention] = useState<LinkageAttentionIntent | null>(null);
 	const [context, setContext] = useState<LinkageContextSnapshot | null>(null);
+	const [contextExpired, setContextExpired] = useState(true);
 	const [events, setEvents] = useState<LinkageContextEvent[]>([]);
 	const [error, setError] = useState('');
 	const [attentionError, setAttentionError] = useState('');
@@ -105,7 +82,6 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 	useEffect(() => {
 		setCommand(null);
 		setOperation(null);
-		setContext(null);
 		setError('');
 		if (!normalizedSymbol) return;
 		try {
@@ -137,20 +113,37 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 	}, [config, selectedTarget?.workspace_id, selectedTarget?.node_id]);
 
 	useEffect(() => {
+		setContext(null);
+		setEvents([]);
+		setContextExpired(true);
 		if (!config) return;
 		let active = true;
 		let timer: number | undefined;
+		let expiryTimer: number | undefined;
 		const refresh = async () => {
 			const [contextResult, eventsResult] = await Promise.allSettled([
-				getLinkageContext(config), getLatestLinkageEvents(config, 12),
+				getLinkageContext(config, selectedTarget?.workspace_id), getLatestLinkageEvents(config, 12, selectedTarget?.workspace_id),
 			]);
-			if (active && contextResult.status === 'fulfilled') setContext(contextResult.value);
+			if (active && contextResult.status === 'fulfilled') {
+				const snapshot = contextResult.value;
+				setContext(snapshot);
+				const ttl = linkageContextTTL(snapshot);
+				if (expiryTimer !== undefined) window.clearTimeout(expiryTimer);
+				setContextExpired(ttl <= 0);
+				if (ttl > 0) expiryTimer = window.setTimeout(() => { if (active) setContextExpired(true); }, ttl);
+			} else if (active) {
+				setContextExpired(true);
+			}
 			if (active && eventsResult.status === 'fulfilled') setEvents(eventsResult.value.events || []);
 			if (active) timer = window.setTimeout(() => { void refresh(); }, 30_000);
 		};
 		void refresh();
-		return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
-	}, [config]);
+		return () => {
+			active = false;
+			if (timer !== undefined) window.clearTimeout(timer);
+			if (expiryTimer !== undefined) window.clearTimeout(expiryTimer);
+		};
+	}, [config, selectedTarget?.workspace_id]);
 
 	useEffect(() => {
 		if (!config || !command) return;
@@ -287,7 +280,7 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 	const leaderEvidence = context?.evidence?.find((item) => item.source_id === 'ats.leader');
 	const leaderCandidate = leaderEvidence?.payload.roles?.find((item) => item.symbol === normalizedSymbol);
 	const leaderIsStale = Boolean(leaderEvidence && (
-		leaderEvidence.freshness !== 'fresh' || leaderEvidence.payload.source_freshness === 'stale'
+		contextExpired || leaderEvidence.freshness !== 'fresh' || leaderEvidence.payload.source_freshness === 'stale'
 		|| leaderEvidence.trade_date !== context?.trade_date
 	));
 	const leaderSummary = leaderEvidence
@@ -296,12 +289,12 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 	const auction = context?.evidence?.find((item) => item.source_id === 'tk.auction' && item.trade_date === context.trade_date);
 	const auctionCodes = auction?.payload.candidate_codes || [];
 	const auctionCandidate = Boolean(auction && auctionCodes.includes(normalizedSymbol));
-	const auctionSummary = auction ? `竞价 ${auction.payload.state || '已记录'} · ${auctionCandidate ? '候选命中' : auction.payload.candidate_codes_complete ? '未入选' : '样本未命中'} · ${auction.payload.candidate_count ?? '?'} 只 · ${auction.freshness}` : '';
+	const auctionSummary = auction ? `竞价 ${auction.payload.state || '已记录'} · ${auctionCandidate ? '候选命中' : auction.payload.candidate_codes_complete ? '未入选' : '样本未命中'} · ${auction.payload.candidate_count ?? '?'} 只 · ${contextExpired || auction.freshness !== 'fresh' ? '历史' : '盘中'}` : '';
 	const instockEvidence = context?.evidence?.find((item) => item.source_id === 'instock.candidates');
 	const instockCandidate = instockEvidence?.payload.candidates?.find((item) => item.symbol === normalizedSymbol);
 	const instockCandidateListed = Boolean(instockCandidate || instockEvidence?.payload.candidate_codes?.includes(normalizedSymbol));
 	const instockIsStale = Boolean(instockEvidence && (
-		instockEvidence.freshness === 'stale' || instockEvidence.payload.source_freshness === 'stale'
+		contextExpired || instockEvidence.freshness === 'stale' || instockEvidence.payload.source_freshness === 'stale'
 		|| instockEvidence.trade_date !== context?.trade_date
 	));
 	const instockIsFresh = Boolean(instockEvidence && !instockIsStale && instockEvidence.freshness === 'fresh');
@@ -336,7 +329,7 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 	return <section className="watchlist-linkage" aria-label="桌面重点关注联动">
 		<div className="watchlist-linkage-context" aria-live="polite">
 			<strong>共享证据</strong>
-			<span>{context ? `${context.trade_date || '日期未知'} · ${context.freshness}` : '等待统一快照'}</span>
+			<span>{context ? `${context.trade_date || '日期未知'} · ${contextExpired ? '过期/断线' : context.freshness}` : '等待统一快照'}</span>
 			<span>题材：{themes.join('、') || '暂无可确认归属'}</span>
 			{themeMetrics.map((summary) => <span key={summary}>题材强度：{summary}</span>)}
 			<span>人气：{rankSummary || '不在当前 Top 100 观测范围'}</span>

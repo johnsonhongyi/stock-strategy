@@ -140,6 +140,53 @@ func cloneStockDirectoryData(data stockDirectoryData) stockDirectoryData {
 	return data
 }
 
+func (s *Server) validateStockDirectorySymbol(ctx context.Context, value string) error {
+	symbol := strings.ToUpper(strings.TrimSpace(value))
+	parts := strings.Split(symbol, ".")
+	if len(parts) != 2 || len(parts[0]) != 6 {
+		return errors.New("unsupported_symbol")
+	}
+	for _, char := range parts[0] {
+		if char < '0' || char > '9' {
+			return errors.New("unsupported_symbol")
+		}
+	}
+	code, exchange := parts[0], parts[1]
+	if code == "000000" {
+		return errors.New("unsupported_symbol")
+	}
+	validPrefix := false
+	switch exchange {
+	case "SH":
+		validPrefix = strings.HasPrefix(code, "600") || strings.HasPrefix(code, "601") ||
+			strings.HasPrefix(code, "603") || strings.HasPrefix(code, "605") ||
+			strings.HasPrefix(code, "688") || strings.HasPrefix(code, "689")
+	case "SZ":
+		validPrefix = strings.HasPrefix(code, "000") || strings.HasPrefix(code, "001") ||
+			strings.HasPrefix(code, "002") || strings.HasPrefix(code, "003") ||
+			strings.HasPrefix(code, "300") || strings.HasPrefix(code, "301")
+	}
+	if !validPrefix {
+		return errors.New("unsupported_symbol")
+	}
+	if s.stockDirectory == nil || s.stockDirectories == nil {
+		return errors.New("stock_directory_unavailable")
+	}
+	data, err := s.stockDirectories.load(ctx, s.stockDirectory)
+	if err != nil {
+		return errors.New("stock_directory_unavailable")
+	}
+	if data.Stale {
+		return errors.New("stock_directory_stale")
+	}
+	for _, entry := range data.Stocks {
+		if strings.EqualFold(strings.TrimSpace(entry.Symbol), symbol) {
+			return nil
+		}
+	}
+	return errors.New("unsupported_symbol")
+}
+
 func (s *Server) stockDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 	if s.stockDirectory == nil {
 		writeError(w, http.StatusServiceUnavailable, "stock directory provider is unavailable")

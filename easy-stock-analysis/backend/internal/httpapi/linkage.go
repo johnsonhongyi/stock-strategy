@@ -78,6 +78,20 @@ func (s *Server) linkageSubmit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid linkage command")
 		return
 	}
+	if command.OperationID != "" && command.SchemaVersion == 1 && command.Type == "WATCHLIST_ADD" &&
+		command.InstrumentType == "stock" && strings.TrimSpace(command.Symbol) != "" {
+		_, lookupErr := s.linkage.GetOperation(r.Context(), command.OperationID)
+		if errors.Is(lookupErr, sql.ErrNoRows) {
+			if validationErr := s.validateStockDirectorySymbol(r.Context(), command.Symbol); validationErr != nil {
+				status := http.StatusBadRequest
+				if strings.HasPrefix(validationErr.Error(), "stock_directory_") {
+					status = http.StatusServiceUnavailable
+				}
+				writeError(w, status, validationErr.Error())
+				return
+			}
+		}
+	}
 	operation, replayed, err := s.linkage.Submit(r.Context(), command)
 	if err != nil {
 		status := http.StatusServiceUnavailable
