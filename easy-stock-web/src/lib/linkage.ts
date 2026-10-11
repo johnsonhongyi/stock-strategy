@@ -246,7 +246,20 @@ export function parseLinkageSetupPackage(consoleText: string): LinkageSetupPacka
 }
 
 export function importLinkageSetup(config: BackendConfig, setup: LinkageSetupPackage) {
-	return requestJSON<LinkageSetupResult>(config, '/api/v1/linkage/targets/import', {
+	const pageOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+	let importBackendUrl = config.backendUrl;
+	try {
+		const page = new URL(pageOrigin);
+		const backend = new URL(config.backendUrl);
+		// Tokenless LAN setup is same-origin only. Use the Web gateway when both
+		// addresses name the same host, even if the saved API URL uses port 20081.
+		if (page.hostname && page.hostname.toLowerCase() === backend.hostname.toLowerCase()) {
+			importBackendUrl = page.origin;
+		}
+	} catch {
+		// Non-browser and non-URL callers keep using the configured backend.
+	}
+	return requestJSON<LinkageSetupResult>({ ...config, backendUrl: importBackendUrl }, '/api/v1/linkage/targets/import', {
 		method: 'POST', headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ ...setup, backend_base_url: config.backendUrl.replace(/\/+$/, '') }),
 	});

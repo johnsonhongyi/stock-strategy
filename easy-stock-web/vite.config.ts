@@ -10,7 +10,8 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:20081',
-        changeOrigin: true,
+        // Keep Host aligned with Origin for tokenless same-origin linkage setup.
+        changeOrigin: false,
         ws: true,
       },
     },

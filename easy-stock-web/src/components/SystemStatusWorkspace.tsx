@@ -111,7 +111,7 @@ function stateTone(value: string) {
 function linkageSetupErrorMessage(error: unknown) {
 	const message = error instanceof Error ? error.message : '';
 	if (message === 'authorized setup token required') {
-		return 'Go 后端已启用 A_STOCK_TOKEN，但当前 Web 请求缺少或带了错误的 Bearer token。TK 的 hmac_key 只用于 HMAC 握手；请按部署脚本同步两端 token、重建 Web 并刷新页面后重试。';
+		return 'Go 后端拒绝了自助导入：请求需要匹配的 A_STOCK_TOKEN，或在无令牌部署中从同一内网来源访问。请让 Web 经 Nginx /api 代理连接 Go；浏览器直连同主机的另一个端口也会被视为跨源。TK 的 hmac_key 只用于后续 HMAC 握手。';
 	}
 	return message || '联动配置失败';
 }

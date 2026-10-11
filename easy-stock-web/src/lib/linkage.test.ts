@@ -30,14 +30,26 @@ describe('TK desktop setup handoff', () => {
 			node_id: 'tk-a1', workspace_id: 'ws-b2', target_registered: true, desktop_status: 'connected',
 		})));
 		vi.stubGlobal('fetch', fetchMock);
+		vi.stubGlobal('window', { location: { origin: 'http://192.168.31.5:20073' } });
 		const setup = parseLinkageSetupPackage(setupLine);
 		const result = await importLinkageSetup({ backendUrl: 'http://192.168.31.5:20081/', token: 'session-token' }, setup);
+		expect(String(fetchMock.mock.calls[0][0])).toBe('http://192.168.31.5:20073/api/v1/linkage/targets/import');
 		const request = fetchMock.mock.calls[0][1] as RequestInit;
 		expect(result.desktop_status).toBe('connected');
 		expect(new Headers(request.headers).get('Authorization')).toBe('Bearer session-token');
 		expect(JSON.parse(request.body as string)).toMatchObject({
 			node_id: 'tk-a1', backend_base_url: 'http://192.168.31.5:20081',
 		});
+	});
+
+	it('keeps the configured API when the page and backend are on different hosts', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+			node_id: 'tk-a1', workspace_id: 'ws-b2', target_registered: true, desktop_status: 'connected',
+		})));
+		vi.stubGlobal('fetch', fetchMock);
+		vi.stubGlobal('window', { location: { origin: 'http://192.168.31.9:20073' } });
+		await importLinkageSetup({ backendUrl: 'http://192.168.31.5:20081', token: '' }, parseLinkageSetupPackage(setupLine));
+		expect(String(fetchMock.mock.calls[0][0])).toBe('http://192.168.31.5:20081/api/v1/linkage/targets/import');
 	});
 });
 
