@@ -42,6 +42,7 @@ import (
 )
 
 type Server struct {
+	webAuth *webAuthStore
 	linkageContextMu      sync.Mutex
 	tdx                   *tdx.Client
 	marketNetwork         *marketnetwork.Config
@@ -388,6 +389,11 @@ func NewServer(config any) *Server {
 		logger:                cfg.Logger,
 		tokenUsage:            tokenUsage,
 	}
+	if cfg.WebAuthDBPath != "" {
+		var err error
+		s.webAuth, err = openWebAuth(cfg.WebAuthDBPath)
+		s.startupError = errors.Join(s.startupError, err)
+	}
 	if strings.TrimSpace(cfg.LinkageDBPath) != "" {
 		service, err := linkage.NewService(cfg.LinkageDBPath, cfg.LinkageTargetsPath)
 		if err != nil {
@@ -456,6 +462,9 @@ func (s *Server) Close() error {
 		s.emotionProgress.close()
 	}
 	var closeErrors []error
+	if s.webAuth != nil {
+		closeErrors = append(closeErrors, s.webAuth.db.Close())
+	}
 	if s.linkage != nil {
 		closeErrors = append(closeErrors, s.linkage.Close())
 	}
@@ -500,6 +509,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.withCORS(loggedWriter, r)
 	if r.Method == http.MethodOptions {
 		loggedWriter.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if s.webAuth != nil && s.handleWebAuth(loggedWriter, r) {
 		return
 	}
 	setupImport := r.Method == http.MethodPost && r.URL.Path == "/api/v1/linkage/targets/import"

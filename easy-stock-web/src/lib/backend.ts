@@ -1933,7 +1933,8 @@ export async function resolveBackendConfig(input: ResolveInput = {}): Promise<Ba
   const env = input.env ?? import.meta.env;
   return normalizeConfig({
     backendUrl: env.VITE_A_STOCK_BACKEND_URL || (typeof window !== 'undefined' && window.location?.origin) || 'http://127.0.0.1:20081',
-    token: env.VITE_A_STOCK_TOKEN || '',
+    // Public Web clients authenticate through the HttpOnly session cookie.
+    token: '',
   });
 }
 
@@ -1971,6 +1972,7 @@ export async function requestJSON<T>(config: BackendConfig, path: string, init: 
 		throw error;
 	}
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new Event('stock-auth-required'));
 		const responseRequestID = response.headers.get('X-Request-ID') || requestID;
 		logRuntimeEvent('warn', runtimeFeatureForPath(requestURL.pathname), {
 			event: 'http_failure', request_id: responseRequestID, method: init.method || 'GET', path: requestURL.pathname, status: response.status,

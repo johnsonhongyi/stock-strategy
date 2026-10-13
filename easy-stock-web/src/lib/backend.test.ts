@@ -34,6 +34,11 @@ describe('backend configuration', () => {
     });
   });
 
+  it('does not expose machine tokens to public Web clients', async () => {
+    const config = await resolveBackendConfig({ env: { VITE_A_STOCK_TOKEN: 'private-machine-token' } });
+    expect(config.token).toBe('');
+  });
+
   it('builds websocket URLs with symbols, interval, and token', () => {
     const url = buildStreamUrl(
       { backendUrl: 'http://127.0.0.1:20001', token: 'desktop-token' },

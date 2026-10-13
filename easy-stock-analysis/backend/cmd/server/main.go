@@ -138,6 +138,7 @@ func main() {
 		HermesHome: hermesHome,
 	})
 	server := httpapi.NewServer(httpapi.Config{
+		WebAuthDBPath: filepath.Join(filepath.Dir(sharedDBPath), "web-users.db"),
 		Token:                os.Getenv("A_STOCK_TOKEN"),
 		ReviewDBPath:         sharedDBPath,
 		PortfolioDBPath:      sharedDBPath,

@@ -23,6 +23,11 @@ func (s *Server) withCORS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authorized(r *http.Request) bool {
+	if s.webAuth != nil {
+		if _, ok := s.webAuth.user(r); ok || webLAN(r) {
+			return true
+		}
+	}
 	if s.token == "" || r.URL.Path == "/api/health" || r.Method == http.MethodOptions {
 		return true
 	}
@@ -71,6 +76,11 @@ func (s *Server) authorizedLinkage(r *http.Request) bool {
 }
 
 func (s *Server) authorizedLinkageAdmin(r *http.Request) bool {
+	if s != nil && s.webAuth != nil {
+		if u, ok := s.webAuth.user(r); ok {
+			return u.Admin
+		}
+	}
 	if s == nil {
 		return false
 	}

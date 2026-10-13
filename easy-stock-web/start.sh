@@ -26,7 +26,7 @@ set -a
 # shellcheck disable=SC1091
 source "$SERVICE_DIR/.env"   # 提供 A_STOCK_TOKEN
 set +a
-export VITE_A_STOCK_TOKEN="$A_STOCK_TOKEN"
+unset VITE_A_STOCK_TOKEN
 unset VITE_A_STOCK_BACKEND_URL   # 为空 -> 前端使用 window.location.origin，经 vite /api 代理访问后端
 
 cd "$WEB_DIR"
