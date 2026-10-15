@@ -100,7 +100,8 @@ func (s *Server) autoFollowAIPeer(w http.ResponseWriter, r *http.Request) {
 		}
 		var status, token, expires string
 		var previous sql.NullString
-		err = db.QueryRowContext(r.Context(), "SELECT status,COALESCE(lease_token,''),expires_at,result_hash FROM ai_jobs WHERE id=? AND node_id=? AND workspace_id=?", input.ID, input.NodeID, input.WorkspaceID).Scan(&status, &token, &expires, &previous)
+		var leaseUntil int64
+		err = db.QueryRowContext(r.Context(), "SELECT status,COALESCE(lease_token,''),expires_at,result_hash,CAST(COALESCE(lease_until,'0') AS INTEGER) FROM ai_jobs WHERE id=? AND node_id=? AND workspace_id=?", input.ID, input.NodeID, input.WorkspaceID).Scan(&status, &token, &expires, &previous, &leaseUntil)
 		if err != nil {
 			writeError(w, 404, "AI job not assigned to desktop")
 			return
@@ -114,7 +115,7 @@ func (s *Server) autoFollowAIPeer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		expiry, e := time.Parse(time.RFC3339Nano, expires)
-		if status != "running" || token != input.LeaseToken || e != nil || !expiry.After(now) {
+		if status != "running" || token != input.LeaseToken || leaseUntil <= now.Unix() || e != nil || !expiry.After(now) {
 			writeError(w, 409, "AI lease expired or result conflict")
 			return
 		}
@@ -123,11 +124,13 @@ func (s *Server) autoFollowAIPeer(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "invalid result envelope")
 			return
 		}
-		if input.Status == "completed" && (len(envelope["proposal"]) == 0 || len(envelope["thread_id"]) == 0) {
+		var threadID string
+		var proposal map[string]json.RawMessage
+		if input.Status == "completed" && (json.Unmarshal(envelope["thread_id"], &threadID) != nil || len(threadID) < 1 || len(threadID) > 128 || json.Unmarshal(envelope["proposal"], &proposal) != nil || proposal == nil || len(proposal["plans"]) == 0) {
 			writeError(w, 400, "AI proposal and thread identity required")
 			return
 		}
-		updated, e := db.ExecContext(r.Context(), "UPDATE ai_jobs SET status=?,result=?,result_hash=?,finished_at=? WHERE id=? AND status='running' AND lease_token=?", input.Status, string(input.Result), resultHash, at, input.ID, token)
+		updated, e := db.ExecContext(r.Context(), "UPDATE ai_jobs SET status=?,result=?,result_hash=?,finished_at=? WHERE id=? AND status='running' AND lease_token=? AND CAST(lease_until AS INTEGER)>?", input.Status, string(input.Result), resultHash, at, input.ID, token, now.Unix())
 		if e != nil {
 			writeError(w, 503, "AI result unavailable")
 			return
