@@ -1,4 +1,4 @@
-import {loadChatRuntime,saveChatRuntime,streamDesktopChat,type ChatRuntime} from '../lib/desktop-chat';
+import {prepareDesktopChatRuntime,loadChatRuntime,saveChatRuntime,streamDesktopChat,type ChatRuntime} from '../lib/desktop-chat';
 import { ReasoningControl } from './ReasoningControl';
 import {
 	Bot,
@@ -257,10 +257,21 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 		} catch (error) { setModelSwitchState('error'); setModelSwitchMessage(error instanceof Error ? error.message : '切换模型配置失败'); }
 	};
 
+	const switchChatRuntime = async (change: Partial<ChatRuntime['config']>) => {
+  if (!config || !desktopRuntime || sending || modelSwitchState === 'switching') return;
+  setModelSwitchState('switching'); setModelSwitchMessage('正在保存对话配置…');
+  try {
+   let next = {...desktopRuntime.config,...change};
+   if (next.provider === 'codex_desktop') next = await prepareDesktopChatRuntime(config,next);
+   await saveChatRuntime(config,next); await loadModel();
+   setModelSwitchState('saved'); setModelSwitchMessage('已保存，刷新后自动恢复；下一条消息生效。');
+  } catch (error) { setModelSwitchState('error'); setModelSwitchMessage(error instanceof Error ? error.message : '对话配置保存失败'); }
+ };
+
 	const switchModel = async (nextModel: string) => {
 		if (!config || !llmConfig || !nextModel || nextModel === llmConfig.model || sending || modelSwitchState === 'switching') return;
 		if(desktopRuntime?.config.provider==='codex_desktop'){
-			try{const m=desktopRuntime.models.find(m=>m.id===nextModel);if(!m)throw new Error('模型不在桌面目录');await saveChatRuntime(config,{...desktopRuntime.config,model:nextModel,reasoning_effort:m.efforts.includes(desktopRuntime.config.reasoning_effort)?desktopRuntime.config.reasoning_effort:m.efforts[0]});await loadModel();}catch(e){setModelSwitchState('error');setModelSwitchMessage(String(e));}return;
+			await switchChatRuntime({model:nextModel}); return;
 		}
 		const previous = llmConfig;
 		setLLMConfig({ ...llmConfig, model: nextModel });
@@ -528,9 +539,9 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 						<textarea ref={textareaRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} placeholder={modelState === 'missing' ? '请先配置 Hermes 模型后开始对话' : modelState === 'error' ? 'AI 运行时不可用，请检查接入设置' : '向 AI 描述任务，Enter 发送，Shift + Enter 换行'} disabled={!config || modelState !== 'ready'} rows={1} />
 						<div className="ai-composer-actions"><span>AI 可能会犯错，请核对关键事实与交易数据。</span>{sending ? <button type="button" className="stop" onClick={stop} title="停止生成"><Square size={14} />停止</button> : <button type="submit" disabled={!draft.trim() || !config || modelState !== 'ready'} title="发送消息"><Send size={15} />发送</button>}</div>
 					</div>
-					<div className="ai-conversation-tools">{desktopRuntime&&<label>接入<select aria-label="对话接入方式" value={desktopRuntime.config.provider} disabled={sending} onChange={e=>{if(config)void saveChatRuntime(config,{...desktopRuntime.config,provider:e.target.value as 'hermes'|'codex_desktop'}).then(()=>loadModel()).catch(e=>setModelSwitchMessage(String(e)));}}><option value="hermes">Hermes</option><option value="codex_desktop">桌面 Codex</option></select></label>}
+					<div className="ai-conversation-tools">{desktopRuntime&&<label>接入<select aria-label="对话接入方式" value={desktopRuntime.config.provider} disabled={sending || modelSwitchState === 'switching'} onChange={e=>void switchChatRuntime({provider:e.target.value as 'hermes'|'codex_desktop'})}><option value="hermes">Hermes</option><option value="codex_desktop">桌面 Codex</option></select></label>}
 						<div className="ai-chat-reasoning-picker">
-							{desktopRuntime?.config.provider==='codex_desktop'?<label>推理强度<select aria-label="对话推理强度" value={desktopRuntime.config.reasoning_effort} disabled={sending} onChange={e=>{if(config)void saveChatRuntime(config,{...desktopRuntime.config,reasoning_effort:e.target.value}).then(()=>loadModel()).catch(e=>setModelSwitchMessage(String(e)));}}>{desktopRuntime.models.find(m=>m.id===desktopRuntime.config.model)?.efforts.map(e=><option key={e}>{e}</option>)}</select></label>:<ReasoningControl config={config} refreshKey={JSON.stringify([llmConfig, activeLLMProfileID, refreshKey, modelListState, modelSwitchState === 'switching'])} disabled={sending || modelSwitchState === 'switching'} onSaved={() => setConversations((current) => clearHermesSessionIDs(current))} />}
+							{desktopRuntime?.config.provider==='codex_desktop'?<label>推理强度<select aria-label="对话推理强度" value={desktopRuntime.config.reasoning_effort} disabled={sending || modelSwitchState === 'switching'} onChange={e=>void switchChatRuntime({reasoning_effort:e.target.value})}>{desktopRuntime.models.find(m=>m.id===desktopRuntime.config.model)?.efforts.map(e=><option key={e}>{e}</option>)}</select></label>:<ReasoningControl config={config} refreshKey={JSON.stringify([llmConfig, activeLLMProfileID, refreshKey, modelListState, modelSwitchState === 'switching'])} disabled={sending || modelSwitchState === 'switching'} onSaved={() => setConversations((current) => clearHermesSessionIDs(current))} />}
 						</div>
 						<div className={`ai-chat-model-picker ${modelListState} ${manualModelEditing ? 'manual' : ''}`} title={modelListMessage || '选择当前 AI 对话使用的模型'}>
 							<span>模型</span>

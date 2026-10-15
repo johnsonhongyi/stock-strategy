@@ -144,3 +144,8 @@
 .watchlist-linkage-controls select {min-width:0;width:100%;max-width:100%;}
 .kline-chart-wrap .watchlist-linkage-error {color:#f87171;}
 .kline-chart-wrap[data-sbc-theme="light"] .watchlist-linkage-error {color:#b91c1c;}
+
+.watchlist-linkage-controls label > span {white-space:nowrap;flex-shrink:0;}
+.watchlist-linkage-controls > button {white-space:nowrap;flex-shrink:0;}
+.kline-chart-wrap > .watchlist-linkage {margin-top:10px;border-radius:0 0 6px 6px;}
+@media(max-width:540px) {.watchlist-linkage-controls {align-items:stretch;flex-direction:column;}.watchlist-linkage-controls > button {order:-1;}}

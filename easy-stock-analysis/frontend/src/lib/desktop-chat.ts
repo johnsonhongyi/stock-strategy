@@ -7,6 +7,18 @@ export async function loadChatRuntime(config:BackendConfig,node_id='',workspace_
  const query=node_id?'?'+new URLSearchParams({node_id,workspace_id}):'';
  return (await requestJSON<{data:ChatRuntime}>(config,'/api/v1/ai/runtime'+query)).data;
 }
+export async function prepareDesktopChatRuntime(config: BackendConfig, current: ChatRuntimeConfig): Promise<ChatRuntimeConfig> {
+ const result = await requestJSON<{targets:Array<{node_id:string;workspace_id:string}>}>(config, '/api/v1/linkage/targets');
+ const candidates = [...result.targets].sort((a,b) => Number(b.node_id === current.node_id) - Number(a.node_id === current.node_id));
+ for (const target of candidates) {
+  const runtime = await loadChatRuntime(config,target.node_id,target.workspace_id);
+  if (!runtime.online || !runtime.models?.length) continue;
+  const model = runtime.models.find(model => model.id === current.model) || runtime.models[0];
+  if (!model.efforts.length) continue;
+  return {...current,provider:'codex_desktop',node_id:target.node_id,workspace_id:target.workspace_id,model:model.id,reasoning_effort:model.efforts.includes(current.reasoning_effort)?current.reasoning_effort:model.efforts[0]};
+ }
+ throw new Error('没有支持 AI 对话的在线 Codex 桌面，请在 AI 接入设置检查桌面桥。');
+}
 export async function saveChatRuntime(config:BackendConfig,value:ChatRuntimeConfig){
  return (await requestJSON<{data:ChatRuntime}>(config,'/api/v1/ai/runtime',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)})).data;
 }

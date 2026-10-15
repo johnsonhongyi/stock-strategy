@@ -331,20 +331,6 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 		: attentionError ? '状态不可用' : '读取中';
 
 	return <section className="watchlist-linkage" aria-label="桌面重点关注联动">
-		<div className="watchlist-linkage-context" aria-live="polite">
-			<strong>共享证据</strong>
-			<span>{context ? `${context.trade_date || '日期未知'} · ${contextExpired ? '过期/断线' : context.freshness}` : '等待统一快照'}</span>
-			<span>题材：{themes.join('、') || '暂无可确认归属'}</span>
-			{themeMetrics.map((summary) => <span key={summary}>题材强度：{summary}</span>)}
-			<span>人气：{rankSummary || '不在当前 Top 100 观测范围'}</span>
-			<span>天梯：{ladder ? `${ladder.level.label} · ${ladder.streak} 连板` : '当前快照未列入'}</span>
-			{leaderSummary && <span>{leaderSummary}</span>}
-			{auctionSummary && <span>竞价证据：{auctionSummary}</span>}
-			{instockSummary && <span>{instockSummary}</span>}
-			{eventSummary.map((summary, index) => <span key={`${summary}-${index}`}>异动：{summary}</span>)}
-			{coverage && <span>覆盖：{coverage}</span>}
-			{unavailableSources && <span>来源状态：{unavailableSources}</span>}
-		</div>
 		<div className="watchlist-linkage-controls">
 			<label><span>桌面</span><select value={selectedNode} onChange={(event) => { setSelectedNode(event.target.value);  }} disabled={busy || attentionBusy || targets.length === 0 || Boolean(command && !isSettled(operation))}>
 				<option value="">{targets.length ? '选择桌面' : '暂无已配置桌面'}</option>
@@ -363,6 +349,20 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
    <span>{config && readLinkageDefault(config) === selectedNode && selectedNode ? '当前使用已保存的默认桌面' : '默认桌面可在系统设置中配置'} · 保存与 TK / ATS 回执分别确认</span>
    {config && readLinkageDefault(config) && !targets.some(target => target.node_id === readLinkageDefault(config)) && <span role="status">原默认节点不可用，请重新选择；不会自动改投其他节点。</span>}
   </div>
+		<div className="watchlist-linkage-context" aria-live="polite">
+			<strong>共享证据</strong>
+			<span>{context ? `${context.trade_date || '日期未知'} · ${contextExpired ? '过期/断线' : context.freshness}` : '等待统一快照'}</span>
+			<span>题材：{themes.join('、') || '暂无可确认归属'}</span>
+			{themeMetrics.map((summary) => <span key={summary}>题材强度：{summary}</span>)}
+			<span>人气：{rankSummary || '不在当前 Top 100 观测范围'}</span>
+			<span>天梯：{ladder ? `${ladder.level.label} · ${ladder.streak} 连板` : '当前快照未列入'}</span>
+			{leaderSummary && <span>{leaderSummary}</span>}
+			{auctionSummary && <span>竞价证据：{auctionSummary}</span>}
+			{instockSummary && <span>{instockSummary}</span>}
+			{eventSummary.map((summary, index) => <span key={`${summary}-${index}`}>异动：{summary}</span>)}
+			{coverage && <span>覆盖：{coverage}</span>}
+			{unavailableSources && <span>来源状态：{unavailableSources}</span>}
+		</div>
 		<div className="watchlist-linkage-attention" aria-live="polite">
 			<span>工作区来源：{attentionSourceSummary}</span>
 			<div className="watchlist-linkage-attention-actions">
