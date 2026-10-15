@@ -35,6 +35,22 @@ func (s *Server) autoFollowAIPeer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "signed configured desktop identity required")
 		return
 	}
+	operation := strings.TrimPrefix(r.URL.Path, "/api/v1/linkage/strategy/")
+	if operation == "chat_claim" || operation == "chat_result" {
+		db, err := s.chatDB()
+		if err != nil {
+			writeError(w, 503, "desktop chat unavailable")
+			return
+		}
+		defer db.Close()
+		response, err := desktopChatPeer(db, operation, input.NodeID, input.WorkspaceID, input.ID, input.LeaseToken, input.Status, input.Result)
+		if err != nil {
+			writeError(w, 409, "desktop chat lease or result rejected")
+			return
+		}
+		writeJSON(w, 200, response)
+		return
+	}
 	db, err := followDB(filepath.Join(filepath.Dir(s.autoFollowDBPath), "control.db"))
 	if err != nil {
 		writeError(w, 503, "AI queue unavailable")

@@ -1,3 +1,4 @@
+import {loadChatRuntime,saveChatRuntime,streamDesktopChat,type ChatRuntime} from '../lib/desktop-chat';
 import { ReasoningControl } from './ReasoningControl';
 import {
 	Bot,
@@ -77,6 +78,7 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 	const [activeID, setActiveID] = useState(() => conversations[0]?.id || '');
 	const [draft, setDraft] = useState('');
 	const [sending, setSending] = useState(false);
+	const [desktopRuntime,setDesktopRuntime]=useState<ChatRuntime|null>(null);
 	const [modelState, setModelState] = useState<ModelState>('loading');
 	const [modelLabel, setModelLabel] = useState('读取模型配置');
 	const [llmConfig, setLLMConfig] = useState<ChatLLMConfig | null>(null);
@@ -159,6 +161,14 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 		setModelSwitchMessage('');
 		setManualModelEditing(false);
 		try {
+			const runtime=await loadChatRuntime(config).catch(e=>{if(e&&typeof e==='object'&&'status' in e&&(e.status===404||e.status===405))return null;throw e;});setDesktopRuntime(runtime);
+			if(runtime?.config.provider==='codex_desktop'){
+				const c=runtime.config;setLLMProfiles([]);setActiveLLMProfileID('codex:'+c.node_id+':'+c.workspace_id+':'+c.reasoning_effort);
+				setLLMConfig({provider:'codex_desktop',base_url:'',model:c.model,api_mode:'chat_completions'});
+				setModelOptions((runtime.models||[]).map(m=>({id:m.id,display_name:m.name})));setModelListState('ready');
+				setModelListMessage('桌面每日模型目录 · '+c.reasoning_effort);setModelState(runtime.online?'ready':'error');
+				setModelLabel(runtime.online?'桌面 Codex · '+c.model+' / '+c.reasoning_effort:'桌面 Codex 离线，请检查独立桥');return;
+			}
 			const payload = await requestJSON<{ data: AppSettings }>(config, '/api/v1/settings');
 			const { hermes, llm } = payload.data;
 			const profiles = payload.data.llm_profiles || [];
@@ -198,12 +208,15 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 		void loadModel();
 	}, [loadModel, refreshKey]);
 
+	useEffect(()=>{const changed=()=>{void loadModel();};window.addEventListener('ai-runtime-changed',changed);return()=>window.removeEventListener('ai-runtime-changed',changed);},[loadModel]);
+
 	useEffect(() => () => {
 		abortRef.current?.abort();
 		if (modelMessageTimerRef.current !== null) window.clearTimeout(modelMessageTimerRef.current);
 	}, []);
 
 	const refreshModels = async () => {
+		if(desktopRuntime?.config.provider==='codex_desktop'){await loadModel();return;}
 		if (!config || !llmConfig || modelListState === 'loading') return;
 		setModelListState('loading');
 		setModelListMessage('正在刷新模型列表…');
@@ -246,6 +259,9 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 
 	const switchModel = async (nextModel: string) => {
 		if (!config || !llmConfig || !nextModel || nextModel === llmConfig.model || sending || modelSwitchState === 'switching') return;
+		if(desktopRuntime?.config.provider==='codex_desktop'){
+			try{const m=desktopRuntime.models.find(m=>m.id===nextModel);if(!m)throw new Error('模型不在桌面目录');await saveChatRuntime(config,{...desktopRuntime.config,model:nextModel,reasoning_effort:m.efforts.includes(desktopRuntime.config.reasoning_effort)?desktopRuntime.config.reasoning_effort:m.efforts[0]});await loadModel();}catch(e){setModelSwitchState('error');setModelSwitchMessage(String(e));}return;
+		}
 		const previous = llmConfig;
 		setLLMConfig({ ...llmConfig, model: nextModel });
 		setModelSwitchState('switching');
@@ -364,7 +380,7 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 				.filter((message) => !message.error)
 				.slice(-40)
 				.map(({ role, content: messageContent }) => ({ role, content: messageContent }));
-			const result = await streamHermesPrompt({
+			const result = await (desktopRuntime?.config.provider==='codex_desktop'?streamDesktopChat:streamHermesPrompt)({
 				config,
 				prompt: content,
 				analysisID: current.analysis_id,
@@ -402,7 +418,7 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 			if ((error as Error)?.name !== 'AbortError') {
 				const failedAt = new Date().toISOString();
 				setConversations((items) => items.map((conversation) => conversation.id === pendingConversation.id
-					? { ...conversation, messages: conversation.messages.map((message) => message.id === assistantID ? { ...message, content: error instanceof Error ? error.message : 'Hermes 对话请求失败，请稍后重试。', created_at: failedAt, error: true } : message), updated_at: failedAt }
+					? { ...conversation, messages: conversation.messages.map((message) => message.id === assistantID ? { ...message, content: error instanceof Error ? error.message : 'AI 对话请求失败，请稍后重试。', created_at: failedAt, error: true } : message), updated_at: failedAt }
 					: conversation));
 			} else {
 				setConversations((items) => items.map((conversation) => conversation.id === pendingConversation.id
@@ -465,7 +481,7 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 					))}
 					{!conversations.length && <div className="ai-thread-empty"><Bot size={22} /><span>新对话会保存在本机</span></div>}
 				</div>
-				<div className="ai-local-note"><span className={`status-dot ${modelState}`} /><div><strong>{modelLabel}</strong><small>Hermes 会话与对话历史保存在当前设备</small></div></div>
+				<div className="ai-local-note"><span className={`status-dot ${modelState}`} /><div><strong>{modelLabel}</strong><small>对话历史保存在当前设备</small></div></div>
 			</aside>
 
 			<div className="ai-conversation-panel">
@@ -480,7 +496,7 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 							<div className="ai-welcome-mark"><Bot size={28} /></div>
 							<span>AI RESEARCH COPILOT</span>
 							<h2>今天想一起研究什么？</h2>
-							<p>由本机 Hermes 驱动，并使用系统设置中的模型，像 Codex 一样围绕目标持续对话、拆解问题并形成可执行结果。</p>
+							<p>使用系统设置中选择的 AI 运行时与模型，围绕目标持续对话、拆解问题并形成可验证的结果。</p>
 							<div className="ai-starter-grid">{starterPrompts.map((prompt) => <button type="button" key={prompt} onClick={() => { setDraft(prompt); textareaRef.current?.focus(); }}>{prompt}<Send size={14} /></button>)}</div>
 						</div>
 					) : (
@@ -509,12 +525,12 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 					{sending && approvalRequest && <div className="ai-approval-card" role="alert"><strong>AI 请求执行外部操作</strong><p>{approvalRequest.description || '该操作可能修改本机文件或运行命令。'}</p>{approvalRequest.command && <code>{approvalRequest.command}</code>}<div><button type="button" onClick={() => { approvalRequest.respond('once'); setApprovalRequest(null); setActivityStatus('正在继续执行…'); }}>允许一次</button><button type="button" onClick={() => { approvalRequest.respond('session'); setApprovalRequest(null); setActivityStatus('本次会话已授权，继续执行…'); }}>本次会话允许</button><button type="button" className="deny" onClick={() => { approvalRequest.respond('deny'); setApprovalRequest(null); setActivityStatus('已拒绝操作，等待 AI 返回说明…'); }}>拒绝</button></div></div>}
 					{sending && clarifyRequest && <div className="ai-clarify-card" role="alert"><strong>AI 需要你的选择</strong><p>{clarifyRequest.request.question}</p>{clarifyRequest.request.choices.length > 0 && <div className="ai-clarify-choices">{clarifyRequest.request.choices.map((choice) => <button type="button" key={choice} onClick={() => answerClarify(choice)}>{choice}</button>)}</div>}<div className="ai-clarify-custom"><input value={clarifyDraft} onChange={(event) => setClarifyDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); answerClarify(clarifyDraft); } }} placeholder={clarifyRequest.request.choices.length ? '其他想法，直接输入…' : '输入你的回答…'} autoFocus /><button type="button" disabled={!clarifyDraft.trim()} onClick={() => answerClarify(clarifyDraft)}>发送</button></div><small>不回复的话，AI 会在等待约 5 分钟后自行继续。</small></div>}
 					<div className={`ai-composer ${sending ? 'sending' : ''}`}>
-						<textarea ref={textareaRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} placeholder={modelState === 'missing' ? '请先配置 Hermes 模型后开始对话' : modelState === 'error' ? 'Hermes 运行时不可用，请检查安装或设置' : '向 Hermes AI 描述任务，Enter 发送，Shift + Enter 换行'} disabled={!config || modelState !== 'ready'} rows={1} />
+						<textarea ref={textareaRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} placeholder={modelState === 'missing' ? '请先配置 Hermes 模型后开始对话' : modelState === 'error' ? 'AI 运行时不可用，请检查接入设置' : '向 AI 描述任务，Enter 发送，Shift + Enter 换行'} disabled={!config || modelState !== 'ready'} rows={1} />
 						<div className="ai-composer-actions"><span>AI 可能会犯错，请核对关键事实与交易数据。</span>{sending ? <button type="button" className="stop" onClick={stop} title="停止生成"><Square size={14} />停止</button> : <button type="submit" disabled={!draft.trim() || !config || modelState !== 'ready'} title="发送消息"><Send size={15} />发送</button>}</div>
 					</div>
-					<div className="ai-conversation-tools">
+					<div className="ai-conversation-tools">{desktopRuntime&&<label>接入<select aria-label="对话接入方式" value={desktopRuntime.config.provider} disabled={sending} onChange={e=>{if(config)void saveChatRuntime(config,{...desktopRuntime.config,provider:e.target.value as 'hermes'|'codex_desktop'}).then(()=>loadModel()).catch(e=>setModelSwitchMessage(String(e)));}}><option value="hermes">Hermes</option><option value="codex_desktop">桌面 Codex</option></select></label>}
 						<div className="ai-chat-reasoning-picker">
-							<ReasoningControl config={config} refreshKey={JSON.stringify([llmConfig, activeLLMProfileID, refreshKey, modelListState, modelSwitchState === 'switching'])} disabled={sending || modelSwitchState === 'switching'} onSaved={() => setConversations((current) => clearHermesSessionIDs(current))} />
+							{desktopRuntime?.config.provider==='codex_desktop'?<label>推理强度<select aria-label="对话推理强度" value={desktopRuntime.config.reasoning_effort} disabled={sending} onChange={e=>{if(config)void saveChatRuntime(config,{...desktopRuntime.config,reasoning_effort:e.target.value}).then(()=>loadModel()).catch(e=>setModelSwitchMessage(String(e)));}}>{desktopRuntime.models.find(m=>m.id===desktopRuntime.config.model)?.efforts.map(e=><option key={e}>{e}</option>)}</select></label>:<ReasoningControl config={config} refreshKey={JSON.stringify([llmConfig, activeLLMProfileID, refreshKey, modelListState, modelSwitchState === 'switching'])} disabled={sending || modelSwitchState === 'switching'} onSaved={() => setConversations((current) => clearHermesSessionIDs(current))} />}
 						</div>
 						<div className={`ai-chat-model-picker ${modelListState} ${manualModelEditing ? 'manual' : ''}`} title={modelListMessage || '选择当前 AI 对话使用的模型'}>
 							<span>模型</span>
@@ -529,16 +545,16 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 									<select aria-label="选择对话模型" value={llmConfig?.model || ''} onChange={(event) => chooseModel(event.target.value)} disabled={!config || !llmConfig || sending || modelSwitchState === 'switching' || modelListState === 'loading'}>
 										{!selectableModels.length && <option value="">{modelListState === 'loading' ? '读取模型中…' : '暂无可选模型'}</option>}
 										{selectableModels.map((option) => <option value={option.id} key={option.id}>{modelOptionLabel(option)}</option>)}
-										{llmConfig && <option value={manualModelOption}>手动输入其他模型…</option>}
+										{llmConfig && <option disabled={desktopRuntime?.config.provider==='codex_desktop'} value={manualModelOption}>手动输入其他模型…</option>}
 									</select>
 									{modelSwitchState === 'switching' && <LoaderCircle className="spin" size={14} />}
 								</>
 							)}
 						</div>
 						<button type="button" className={`ai-chat-model-refresh ${modelListState}`} onClick={() => void refreshModels()} disabled={!config || !llmConfig || sending || modelSwitchState === 'switching' || modelListState === 'loading'} title={modelListState === 'error' ? `模型列表获取失败：${modelListMessage}` : '刷新模型列表'}>{modelListState === 'loading' ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</button>
-						<button type="button" className="ai-chat-settings-button" onClick={onOpenSettings}><Settings size={15} />Hermes 设置</button>
+						<button type="button" className="ai-chat-settings-button" onClick={onOpenSettings}><Settings size={15} />AI 接入设置</button>
 					</div>
-					{modelState !== 'ready' && <button type="button" className="ai-configure-hint" onClick={onOpenSettings}><Settings size={14} />{modelState === 'error' ? 'Hermes 运行时不可用，查看系统设置' : '尚未配置 Hermes 模型，打开系统设置'}</button>}
+					{modelState !== 'ready' && <button type="button" className="ai-configure-hint" onClick={onOpenSettings}><Settings size={14} />{modelState === 'error' ? 'AI 运行时不可用，查看接入设置' : '尚未配置 AI 接入方式，打开系统设置'}</button>}
 				</form>
 			</div>
 		</section>

@@ -1,8 +1,8 @@
-# Hermes AI 底座集成
+# Hermes / 桌面 Codex AI 底座集成
 
 ## 目标
 
-项目内所有需要大模型推理的能力统一经过 Hermes：
+项目内模型探针和复盘提炼默认经过 Hermes；AI 对话可选择 Hermes 或桌面 Codex：
 
 - 侧边栏 AI 对话；
 - 设置页真实模型连接探针；
@@ -30,6 +30,19 @@ React AI 对话
 复盘提炼和连接探针使用同一个 Hermes Runtime 的一次性 Prompt 接口，因此不会回退到模型厂商直连。
 
 大V复盘的作者归纳、跨作者总结和 JSON 纠错会启用一次性任务沙箱。沙箱仅开放 Python 结构化计算与只读 Web 检索，遇到工具授权请求时只在当前临时会话内自动允许，因此无需等待人工确认；普通侧边栏对话仍沿用交互式授权。
+
+## 可选桌面 Codex 对话运行时
+
+系统设置的“AI 对话接入方式”选择 Hermes 或 codex_desktop；默认保持 Hermes。Codex 使用已登记的 Windows HMAC 桥和桌面登录账户，不填写/转移 Codex API Key。共享运行时设置由管理员保存，普通对话沿用已有登录访问规则并按用户隔离会话。
+
+- GET/PUT /api/v1/ai/runtime：独立对话配置与桌面每日模型目录，选择节点、模型和推理强度；只有声明 ai_chat_v1 的在线桥可用。
+- POST /api/v1/ai/desktop/jobs、GET/DELETE /api/v1/ai/desktop/jobs/{id}：提交、增量读取和取消；逻辑会话与原生 thread 映射持久化，续聊使用 thread/resume。切换节点/模型/强度后新建原生会话并携带有限的历史上下文。
+- 既有 HMAC strategy/chat_claim、strategy/chat_result 领取/回传独立 desktop_chat_jobs；任务租约、到期、取消、用户归属及模型配置均校验。策略队列和执行门禁不变。
+- 桌面禁止 shell、网络检索与写入，仅提供只读市场快照工具；报告/心法上下文沿用服务端已有的 enrichHermesPrompt。Hermes Skills/MCP 不自动移交给 Codex。
+- 新适配器复用原对话历史、停止按钮、状态与消息回调。正常助手文本增量回传，不将模型内部推理伪装为可展示内容；未取得原生 token 统计时不编造计数。
+- 仅 AI 对话选择运行时；现有 Hermes 模型探针、复盘提炼和技能管理仍使用 Hermes，不能把其不可用误报为 Codex 不可用。
+
+配置、会话和任务存储在现有外置 control.db 的独立表。旧 API 不支持运行时接口时保留原 Hermes 行为；新桥访问旧 API 的聊天接口 404/405 时继续原策略任务，不扩大 HMAC 授权路径。
 
 ## 配置与密钥
 

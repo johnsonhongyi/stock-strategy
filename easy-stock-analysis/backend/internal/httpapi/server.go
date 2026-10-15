@@ -614,7 +614,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.health)
 	s.mux.HandleFunc("GET /api/v1/system/status", s.systemStatus)
 	s.mux.HandleFunc("GET /api/v1/auto-follow", s.autoFollowStatus)
-	for _, operation := range []string{"claim", "result", "heartbeat"} {
+	for _, operation := range []string{"claim", "result", "heartbeat", "chat_claim", "chat_result"} {
 		s.mux.HandleFunc("POST /api/v1/linkage/strategy/"+operation, s.autoFollowAIPeer)
 	}
 	s.mux.HandleFunc("POST /api/v1/auto-follow/commands", s.autoFollowCommand)
@@ -709,6 +709,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/settings/llm/models", s.settingsLLMModels)
 	s.mux.HandleFunc("POST /api/v1/settings/llm/test", s.settingsLLMTest)
 	s.mux.HandleFunc("GET /api/v1/ai/ws", s.aiChatWebSocket)
+	s.mux.HandleFunc("GET /api/v1/ai/runtime", s.desktopChatRuntime)
+	s.mux.HandleFunc("PUT /api/v1/ai/runtime", s.desktopChatRuntime)
+	s.mux.HandleFunc("POST /api/v1/ai/desktop/jobs", s.desktopChatJob)
+	s.mux.HandleFunc("GET /api/v1/ai/desktop/jobs/{id}", s.desktopChatJob)
+	s.mux.HandleFunc("DELETE /api/v1/ai/desktop/jobs/{id}", s.desktopChatJob)
 	s.mux.HandleFunc("POST /api/v1/strategy/inflections/evaluate", s.inflectionEvaluate)
 	s.mux.HandleFunc("GET /api/v1/ws/stream", s.stream)
 }
