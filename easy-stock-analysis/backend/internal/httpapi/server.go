@@ -18,6 +18,7 @@ import (
 	"easy-stock/backend/internal/appsettings"
 	"easy-stock/backend/internal/foundation"
 	"easy-stock/backend/internal/hermes"
+	"easy-stock/backend/internal/linkage"
 	"easy-stock/backend/internal/marketbars"
 	"easy-stock/backend/internal/marketcache"
 	"easy-stock/backend/internal/marketemotion"
@@ -38,11 +39,11 @@ import (
 	"easy-stock/backend/internal/sector"
 	"easy-stock/backend/internal/stockanalysis"
 	"easy-stock/backend/internal/strategy/inflection"
-	"easy-stock/backend/internal/linkage"
 )
 
 type Server struct {
-	webAuth *webAuthStore
+	autoFollowDBPath      string
+	webAuth               *webAuthStore
 	linkageContextMu      sync.Mutex
 	tdx                   *tdx.Client
 	marketNetwork         *marketnetwork.Config
@@ -105,6 +106,12 @@ func newMarketHTTPClient(timeout time.Duration, transport http.RoundTripper) *ht
 
 func NewServer(config any) *Server {
 	cfg := normalizeConfig(config)
+	if cfg.AutoFollowDBPath == "" {
+		cfg.AutoFollowDBPath = os.Getenv("EASY_STOCK_FOLLOW_DB")
+		if cfg.AutoFollowDBPath == "" {
+			cfg.AutoFollowDBPath = "/data/auto-follow/account.db"
+		}
+	}
 	tokenUsage := newTokenUsageStore(cfg.SettingsPath)
 	if cfg.Logger == nil {
 		cfg.Logger = log.Default()
@@ -348,6 +355,7 @@ func NewServer(config any) *Server {
 		kLinePrimary:          cfg.KLinePrimary,
 		tdx:                   tdxClient,
 		kLineFallback:         cfg.KLineFallback,
+		autoFollowDBPath:      cfg.AutoFollowDBPath,
 		newsProvider:          cfg.News,
 		sectorMap:             cfg.SectorMap,
 		themeOverview:         cfg.ThemeOverview,
@@ -605,6 +613,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/linkage/attention/intents/batch", s.linkageAttentionBatch)
 	s.mux.HandleFunc("GET /api/health", s.health)
 	s.mux.HandleFunc("GET /api/v1/system/status", s.systemStatus)
+	s.mux.HandleFunc("GET /api/v1/auto-follow", s.autoFollowStatus)
+	for _, operation := range []string{"claim", "result", "heartbeat"} {
+		s.mux.HandleFunc("POST /api/v1/linkage/strategy/"+operation, s.autoFollowAIPeer)
+	}
+	s.mux.HandleFunc("POST /api/v1/auto-follow/commands", s.autoFollowCommand)
 	s.mux.HandleFunc("GET /api/v1/market-data/network", s.marketNetworkSettings)
 	s.mux.HandleFunc("PUT /api/v1/market-data/network", s.marketNetworkSettings)
 	s.mux.HandleFunc("GET /api/v1/sources", s.sources)

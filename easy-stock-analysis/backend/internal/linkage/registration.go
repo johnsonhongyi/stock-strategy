@@ -172,10 +172,10 @@ func (s *Service) ImportSetup(ctx context.Context, setup SetupPackage) (SetupRes
 		return result, nil
 	}
 	var configured struct {
-		Status          string `json:"status"`
-		NodeID          string `json:"node_id"`
-		WorkspaceID     string `json:"workspace_id"`
-		ConnectionTest  string `json:"connection_test"`
+		Status         string `json:"status"`
+		NodeID         string `json:"node_id"`
+		WorkspaceID    string `json:"workspace_id"`
+		ConnectionTest string `json:"connection_test"`
 	}
 	if err := json.Unmarshal(responseBody, &configured); err != nil || configured.Status != "configured" ||
 		configured.NodeID != target.NodeID || configured.WorkspaceID != target.WorkspaceID || configured.ConnectionTest != "hmac_verified" {
@@ -238,7 +238,8 @@ func peerRouteAllowed(method, requestURI string, body []byte, workspaceID, nodeI
 	case method == http.MethodGet && parsed.Path == "/api/v1/linkage/attention":
 		return parsed.Query().Get("workspace_id") == workspaceID && parsed.Query().Get("node_id") == nodeID
 	case method == http.MethodPost && (parsed.Path == "/api/v1/linkage/context/evidence" ||
-		parsed.Path == "/api/v1/linkage/attention/intents" || parsed.Path == "/api/v1/linkage/attention/intents/batch"):
+		parsed.Path == "/api/v1/linkage/attention/intents" || parsed.Path == "/api/v1/linkage/attention/intents/batch" ||
+		parsed.Path == "/api/v1/linkage/strategy/claim" || parsed.Path == "/api/v1/linkage/strategy/result" || parsed.Path == "/api/v1/linkage/strategy/heartbeat"):
 		var identity struct {
 			WorkspaceID string `json:"workspace_id"`
 			NodeID      string `json:"node_id"`

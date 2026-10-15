@@ -105,7 +105,8 @@ type ReviewImporter interface {
 }
 
 type Config struct {
-	WebAuthDBPath string
+	AutoFollowDBPath     string
+	WebAuthDBPath        string
 	Token                string
 	Realtime             RealtimeProvider
 	KLinePrimary         KLineProvider

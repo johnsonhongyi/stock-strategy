@@ -1,0 +1,4 @@
+export type FollowPlan = {execution_blockers?:string[];checks?:Array<{name:string;status:string}>;checked_at?:string;trade_time?:string;source?:string;daily_trade_date?:string;minute_trade_time?:string;fresh_quote?:boolean;structure_ready?:boolean;blocker?:string;metrics?:Record<string,number|boolean>;conditions?:string[];errors?:string[];response?:string;invalidation?:string;exit_plan?:string;reference_shares?:number;reference_amount?:number;take_profit_reference?:number;stop_loss_reference?:number};
+export type FlowRow = {code:string;name:string;rank:number;net_flow:number;flow_field:string;change_percent:number;rank_change?:number;flow_change?:number};
+export type FlowSnapshot = {coverage?:number;error?:string;rows?:FlowRow[];meta?:{source?:string;fetched_at?:string;trade_date?:string};comparison_at?:string};
+export type FollowResearch = {checked_at?:string;pool_mode?:string;errors?:string[];industry?:FlowSnapshot;theme?:FlowSnapshot};
