@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {renderToString} from 'react-dom/server';
-import {FollowAIWorkspace,commandNotice} from './FollowAIWorkspace';
+import {FollowAIWorkspace,commandNotice,commandAISettings} from './FollowAIWorkspace';
 import {AIReviewPanel} from './AIReviewPanel';
 import type {FollowData} from '../lib/auto-follow';
 
@@ -28,4 +28,9 @@ describe('worker receipt and model failure feedback',()=>{
   const html=renderToString(<FollowAIWorkspace data={null} config={null} onChanged={()=>{}}/>);
   expect(html).toContain('AI分析模型');expect(html).toContain('AI推理强度');expect(html).toContain('最近实际生效');expect(html).toContain('数据目录');
  });
+});
+
+it('does not send worker-only persisted fields to the strict settings API',()=>{
+ const persisted={enabled:true,mode:'enforce' as const,node_id:'desktop',workspace_id:'workspace',interval_seconds:900};
+ expect(commandAISettings(persisted,'gpt-6-luna','low')).toEqual({enabled:true,mode:'enforce',node_id:'desktop',workspace_id:'workspace',model:'gpt-6-luna',reasoning_effort:'low'});
 });
