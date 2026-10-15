@@ -45,7 +45,7 @@ func (s *Server) autoFollowAIPeer(w http.ResponseWriter, r *http.Request) {
 	at := now.UTC().Format(time.RFC3339Nano)
 	switch strings.TrimPrefix(r.URL.Path, "/api/v1/linkage/strategy/") {
 	case "heartbeat":
-		if (input.Status != "ready" && input.Status != "analyzing" && input.Status != "degraded") || len(input.Detail) > 4096 {
+		if (input.Status != "ready" && input.Status != "analyzing" && input.Status != "degraded") || len(input.Detail) > 16384 {
 			writeError(w, 400, "invalid desktop status")
 			return
 		}
@@ -82,7 +82,7 @@ func (s *Server) autoFollowAIPeer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		lease := hex.EncodeToString(token)
-		updated, e := db.ExecContext(r.Context(), "UPDATE ai_jobs SET status='running',lease_token=?,lease_until=? WHERE id=? AND node_id=? AND workspace_id=? AND (status='queued' OR (status='running' AND CAST(lease_until AS INTEGER)<?))", lease, now.Add(240*time.Second).Unix(), id, input.NodeID, input.WorkspaceID, now.Unix())
+		updated, e := db.ExecContext(r.Context(), "UPDATE ai_jobs SET status='running',lease_token=?,lease_until=? WHERE id=? AND node_id=? AND workspace_id=? AND (status='queued' OR (status='running' AND CAST(lease_until AS INTEGER)<?))", lease, now.Add(360*time.Second).Unix(), id, input.NodeID, input.WorkspaceID, now.Unix())
 		if e != nil {
 			writeError(w, 503, "lease unavailable")
 			return

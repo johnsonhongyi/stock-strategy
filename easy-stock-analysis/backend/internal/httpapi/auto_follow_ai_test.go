@@ -201,3 +201,25 @@ func TestAIPeerWithWebLoginConsumesNonceOnce(t *testing.T) {
 		t.Fatalf("web login plus HMAC: %d %s", response.Code, response.Body.String())
 	}
 }
+
+func TestAISettingsCarriesModelAndEffort(t *testing.T) {
+	s, _, _ := aiPeerFixture(t)
+	body := `{"id":"model-settings-test","action":"ai_settings","ai_settings":{"enabled":true,"mode":"enforce","node_id":"desk","workspace_id":"ws","model":"gpt-6-luna","reasoning_effort":"low"}}`
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest("POST", "http://127.0.0.1/api/v1/auto-follow/commands", strings.NewReader(body))
+	request.RemoteAddr = "127.0.0.1:12345"
+	s.autoFollowCommand(response, request)
+	if response.Code != 202 {
+		t.Fatalf("%d %s", response.Code, response.Body.String())
+	}
+	for _, effort := range []string{"invented", "high|ultra", "high|xhigh"} {
+		bad := strings.Replace(body, `"low"`, `"`+effort+`"`, 1)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "http://127.0.0.1/api/v1/auto-follow/commands", strings.NewReader(bad))
+		r.RemoteAddr = "127.0.0.1:12345"
+		s.autoFollowCommand(w, r)
+		if w.Code != 400 {
+			t.Fatalf("invalid effort accepted: %d", w.Code)
+		}
+	}
+}

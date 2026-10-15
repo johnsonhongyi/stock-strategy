@@ -167,15 +167,27 @@ func (s *Server) autoFollowCommand(w http.ResponseWriter, r *http.Request) {
 		payload = string(b)
 	case "ai_settings":
 		var settings struct {
-			Enabled     *bool  `json:"enabled"`
-			Mode        string `json:"mode"`
-			NodeID      string `json:"node_id"`
-			WorkspaceID string `json:"workspace_id"`
+			Enabled         *bool  `json:"enabled"`
+			Mode            string `json:"mode"`
+			NodeID          string `json:"node_id"`
+			WorkspaceID     string `json:"workspace_id"`
+			Model           string `json:"model,omitempty"`
+			ReasoningEffort string `json:"reasoning_effort,omitempty"`
 		}
 		d := json.NewDecoder(strings.NewReader(string(input.AISettings)))
 		d.DisallowUnknownFields()
 		if d.Decode(&settings) != nil || ensureJSONEOF(d) != nil || settings.Enabled == nil || (settings.Mode != "shadow" && settings.Mode != "enforce") || s.linkage == nil || !s.linkage.IsConfiguredTarget(settings.WorkspaceID, settings.NodeID) {
 			writeError(w, 400, "invalid AI desktop settings")
+			return
+		}
+		validEffort := settings.ReasoningEffort == ""
+		for _, effort := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"} {
+			if settings.ReasoningEffort == effort {
+				validEffort = true
+			}
+		}
+		if len(settings.Model) > 96 || strings.ContainsAny(settings.Model, " /\\\r\n") || !validEffort {
+			writeError(w, 400, "invalid model or reasoning effort")
 			return
 		}
 		b, _ := json.Marshal(settings)
