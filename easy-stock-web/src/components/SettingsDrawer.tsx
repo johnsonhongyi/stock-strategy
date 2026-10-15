@@ -1,3 +1,4 @@
+import {LinkageDefaultSettings} from './LinkageDefaultSettings';
 import {ChatRuntimeSettingsPanel} from './ChatRuntimeSettingsPanel';
 import {
 	Bot,
@@ -483,6 +484,7 @@ export function SettingsDrawer({ config, open, onClose, onSaved }: Props) {
 							<em>{configuredCount} 项已配置</em>
 						</section>
 
+						<LinkageDefaultSettings config={config} open={open} />
 						<ChatRuntimeSettingsPanel config={config} open={open} />
 						<HermesAgentSettingsPanel config={config} open={open} />
 

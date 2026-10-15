@@ -1,3 +1,4 @@
+import { linkageDefaultEvent, readLinkageDefault, resolveLinkageDefault, saveLinkageDefault } from '../lib/linkage-default';
 import { linkageContextTTL, linkageOperationRefreshDelay } from "../lib/linkage";
 import { useEffect, useMemo, useState } from 'react';
 import { BackendRequestError, type BackendConfig } from '../lib/backend';
@@ -67,17 +68,20 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 			if (!active) return;
 			const items = response.targets || [];
 			setTargets(items);
-			setSelectedNode((current) => {
-				if (items.some((item) => item.node_id === current)) return current;
-				const saved = localStorage.getItem('watchlist-linkage:selected-node');
-				if (saved && items.some((item) => item.node_id === saved)) return saved;
-				return items.length === 1 ? items[0].node_id : '';
-			});
+			setSelectedNode(resolveLinkageDefault(items, readLinkageDefault(config)));
 		}).catch((loadError) => {
 			if (active) setError(loadError instanceof Error ? loadError.message : '无法读取桌面列表');
 		});
 		return () => { active = false; };
 	}, [config]);
+
+	useEffect(() => {
+		if (!config) return;
+		const refresh = () => setSelectedNode(resolveLinkageDefault(targets, readLinkageDefault(config)));
+		window.addEventListener(linkageDefaultEvent, refresh);
+		window.addEventListener('storage', refresh);
+		return () => { window.removeEventListener(linkageDefaultEvent, refresh); window.removeEventListener('storage', refresh); };
+	}, [config, targets]);
 
 	useEffect(() => {
 		setCommand(null);
@@ -342,7 +346,7 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 			{unavailableSources && <span>来源状态：{unavailableSources}</span>}
 		</div>
 		<div className="watchlist-linkage-controls">
-			<label><span>桌面</span><select value={selectedNode} onChange={(event) => { setSelectedNode(event.target.value); localStorage.setItem('watchlist-linkage:selected-node', event.target.value); }} disabled={busy || attentionBusy || targets.length === 0 || Boolean(command && !isSettled(operation))}>
+			<label><span>桌面</span><select value={selectedNode} onChange={(event) => { setSelectedNode(event.target.value);  }} disabled={busy || attentionBusy || targets.length === 0 || Boolean(command && !isSettled(operation))}>
 				<option value="">{targets.length ? '选择桌面' : '暂无已配置桌面'}</option>
 				{targets.map((target) => <option key={target.node_id} value={target.node_id}>{target.label || target.node_id} · {target.status}</option>)}
 			</select></label>
@@ -350,6 +354,15 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 				{busy ? '提交中…' : command && !isSettled(operation) ? '重试 / 刷新状态' : '添加到重点关注'}
 			</button>
 		</div>
+		<div className="watchlist-linkage-default">
+   <button type="button" disabled={!config || !selectedNode} onClick={() => {
+    if (!config) return;
+    try { saveLinkageDefault(config, selectedNode); setAttentionMessage('默认联动桌面已保存，下次自动使用。'); }
+    catch { setAttentionError('无法保存默认桌面'); }
+   }}>设为默认桌面</button>
+   <span>{config && readLinkageDefault(config) === selectedNode && selectedNode ? '当前使用已保存的默认桌面' : '默认桌面可在系统设置中配置'} · 保存与 TK / ATS 回执分别确认</span>
+   {config && readLinkageDefault(config) && !targets.some(target => target.node_id === readLinkageDefault(config)) && <span role="status">原默认节点不可用，请重新选择；不会自动改投其他节点。</span>}
+  </div>
 		<div className="watchlist-linkage-attention" aria-live="polite">
 			<span>工作区来源：{attentionSourceSummary}</span>
 			<div className="watchlist-linkage-attention-actions">

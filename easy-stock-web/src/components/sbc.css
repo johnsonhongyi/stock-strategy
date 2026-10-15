@@ -134,3 +134,13 @@
 .kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#2a0015"] { fill:#fff1f7; }
 .kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [stroke="#2a1e00"] { stroke:#fff8dc; }
 .kline-chart-wrap[data-sbc-theme="light"] [data-sbc-layer] [fill="#2a1e00"] { fill:#fff8dc; }
+
+/* Embedded evidence and desktop controls follow the chart palette. */
+.kline-chart-wrap .watchlist-linkage { --theme-surface-soft:#111827; --theme-surface:#181824; --line:#353548; --text:#e2e8f0; --muted:#94a3b8; color-scheme:dark; }
+.kline-chart-wrap[data-sbc-theme="light"] .watchlist-linkage { --theme-surface-soft:#f8fafc; --theme-surface:#fff; --line:#cbd5e1; --text:#334155; --muted:#64748b; color-scheme:light; }
+.watchlist-linkage-default {display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted);}
+.watchlist-linkage-default button {border:1px solid var(--line);border-radius:6px;padding:5px 8px;cursor:pointer;}
+.watchlist-linkage-controls label {min-width:0;flex:1;}
+.watchlist-linkage-controls select {min-width:0;width:100%;max-width:100%;}
+.kline-chart-wrap .watchlist-linkage-error {color:#f87171;}
+.kline-chart-wrap[data-sbc-theme="light"] .watchlist-linkage-error {color:#b91c1c;}
