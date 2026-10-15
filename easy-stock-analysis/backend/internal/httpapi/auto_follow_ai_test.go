@@ -67,6 +67,9 @@ func aiPeerFixture(t *testing.T) (*Server, func(string, map[string]any) *httptes
 			request.Header.Set(k, v)
 		}
 		response := httptest.NewRecorder()
+		if s.webAuth != nil && s.handleWebAuth(response, request) {
+			return response
+		}
 		if !s.authorizedLinkage(request) {
 			response.WriteHeader(401)
 			return response
@@ -181,5 +184,20 @@ func TestAutoFollowAIPeerRejectsUnsignedAndNullResult(t *testing.T) {
 	r = call("heartbeat", map[string]any{"status": "ready", "detail": map[string]any{"provider": "fixture"}})
 	if r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
+	}
+}
+
+func TestAIPeerWithWebLoginConsumesNonceOnce(t *testing.T) {
+	t.Setenv("A_STOCK_BOOTSTRAP_PASSWORD", "isolated-test-password")
+	s, call, _ := aiPeerFixture(t)
+	auth, err := openWebAuth(filepath.Join(t.TempDir(), "users.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.webAuth = auth
+	t.Cleanup(func() { auth.db.Close() })
+	response := call("heartbeat", map[string]any{"status": "ready", "detail": map[string]any{}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("web login plus HMAC: %d %s", response.Code, response.Body.String())
 	}
 }

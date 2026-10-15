@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 )
 
 const maxLinkagePeerBody = 640 << 10
+
+type linkagePeerVerifiedKey struct{}
 
 func (s *Server) withCORS(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
@@ -48,6 +51,9 @@ func (s *Server) authorizedLinkage(r *http.Request) bool {
 	if s == nil {
 		return false
 	}
+	if verified, _ := r.Context().Value(linkagePeerVerifiedKey{}).(bool); verified {
+		return true
+	}
 	// Desktop identities always require HMAC; browser/CLI requests use the import policy.
 	peer := false
 	for name := range r.Header {
@@ -72,7 +78,12 @@ func (s *Server) authorizedLinkage(r *http.Request) bool {
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 	}
-	return s.linkage.AuthenticatePeerRequest(r.Method, r.URL.RequestURI(), r.Header, body)
+	if !s.linkage.AuthenticatePeerRequest(r.Method, r.URL.RequestURI(), r.Header, body) {
+		return false
+	}
+	// Web login and linkage routing share one request; consume its nonce once.
+	*r = *r.WithContext(context.WithValue(r.Context(), linkagePeerVerifiedKey{}, true))
+	return true
 }
 
 func (s *Server) authorizedLinkageAdmin(r *http.Request) bool {
