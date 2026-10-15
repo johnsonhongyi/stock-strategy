@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"easy-stock/backend/internal/appsettings"
 	"easy-stock/backend/internal/linkage"
 )
 
@@ -17,8 +18,9 @@ func (s *Server) linkageTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"schema_version": 1,
-		"targets":        s.linkage.Targets(),
+		"schema_version":  1,
+		"targets":         s.linkage.Targets(),
+		"default_node_id": s.settingsStore.Snapshot().LinkageDefaultNodeID,
 	})
 }
 
@@ -154,4 +156,42 @@ func (s *Server) linkageOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, operation)
+}
+
+// The shared default changes only through the administrator control boundary.
+func (s *Server) linkageDefaultUpdate(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizedLinkageAdmin(r) || (r.Header.Get("Origin") != "" && !webSameOrigin(r)) {
+		writeError(w, http.StatusForbidden, "需要管理员权限")
+		return
+	}
+	var input struct {
+		Node string `json:"node_id"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil {
+		writeError(w, 400, "无效默认桌面设置")
+		return
+	}
+	input.Node = strings.TrimSpace(input.Node)
+	if input.Node != "" {
+		found := false
+		if s.linkage != nil {
+			for _, target := range s.linkage.Targets() {
+				if target["node_id"] == input.Node {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			writeError(w, 400, "桌面节点未登记")
+			return
+		}
+	}
+	if _, err := s.settingsStore.Update(func(values *appsettings.Values) error { values.LinkageDefaultNodeID = input.Node; return nil }); err != nil {
+		writeError(w, 503, "默认桌面保存失败")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"node_id": input.Node})
 }

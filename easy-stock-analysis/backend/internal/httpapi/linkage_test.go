@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"easy-stock/backend/internal/appsettings"
 	"easy-stock/backend/internal/linkage"
 )
 
@@ -482,5 +483,64 @@ func TestLinkageLANAccessBoundary(t *testing.T) {
 				t.Fatal("unverified desktop identity bypassed HMAC")
 			}
 		})
+	}
+}
+
+func TestLinkageDefaultPersistsAndRejectsUnknownNode(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "targets.json")
+	if err := os.WriteFile(filepath.Join(root, "key.bin"), []byte(strings.Repeat("k", 32)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"targets":[{"node_id":"tk-1","workspace_id":"desk","label":"JohnsonTriton","base_url":"http://127.0.0.1:26676","key_file":"key.bin","enabled":true}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	service, err := linkage.NewService(filepath.Join(root, "linkage.db"), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(root, "settings.json")
+	store, err := appsettings.Open(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(Config{Token: "test-token", SettingsStore: store})
+	server.linkage = service
+	defer server.Close()
+	request := func(body, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("PUT", "/api/v1/linkage/default", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		server.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := request(`{"node_id":"tk-1"}`, ""); rec.Code != 401 {
+		t.Fatalf("unauthorized: %d", rec.Code)
+	}
+	if rec := request(`{"node_id":"tk-1"}`, "test-token"); rec.Code != 200 {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body.String())
+	}
+	reopened, err := appsettings.Open(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Snapshot().LinkageDefaultNodeID != "tk-1" {
+		t.Fatal("default not persisted")
+	}
+	if rec := request(`{"node_id":"missing"}`, "test-token"); rec.Code != 400 {
+		t.Fatalf("unknown: %d", rec.Code)
+	}
+	if store.Snapshot().LinkageDefaultNodeID != "tk-1" {
+		t.Fatal("invalid update changed default")
+	}
+	req := httptest.NewRequest("GET", "/api/v1/linkage/targets", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `"default_node_id":"tk-1"`) {
+		t.Fatalf("read: %s", rec.Body.String())
+	}
+	if rec := request(`{"node_id":""}`, "test-token"); rec.Code != 200 || store.Snapshot().LinkageDefaultNodeID != "" {
+		t.Fatal("clear failed")
 	}
 }

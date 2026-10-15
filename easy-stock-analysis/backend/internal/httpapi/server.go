@@ -602,6 +602,7 @@ func (s *Server) refreshMasterySnapshot(ctx context.Context, force bool) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/linkage/targets", s.linkageTargets)
+	s.mux.HandleFunc("PUT /api/v1/linkage/default", s.linkageDefaultUpdate)
 	s.mux.HandleFunc("POST /api/v1/linkage/targets/import", s.linkageImportTarget)
 	s.mux.HandleFunc("POST /api/v1/linkage/commands", s.linkageSubmit)
 	s.mux.HandleFunc("GET /api/v1/linkage/operations/{operation_id}", s.linkageOperation)

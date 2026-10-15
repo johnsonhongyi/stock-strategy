@@ -1,3 +1,4 @@
+import { cacheLinkageDefault } from './linkage-default';
 import { requestJSON, type BackendConfig } from './backend';
 
 export const SBC_WATCHLIST_SOURCE = 'stock-strategy.sbc' as const;
@@ -218,7 +219,10 @@ export function canReplayWatchlistAddCommand(command: WatchlistAddCommand, now =
 }
 
 export function listLinkageTargets(config: BackendConfig) {
-	return requestJSON<{ schema_version: number; targets: LinkageTarget[] }>(config, '/api/v1/linkage/targets');
+	return requestJSON<{ schema_version: number; targets: LinkageTarget[]; default_node_id?: string }>(config, '/api/v1/linkage/targets').then(result => {
+		cacheLinkageDefault(config, result.default_node_id || '');
+		return result;
+	});
 }
 
 export function parseLinkageSetupPackage(consoleText: string): LinkageSetupPackage {

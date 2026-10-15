@@ -73,12 +73,13 @@ type ReviewSourceProfile struct {
 }
 
 type Values struct {
-	LLM                LLM              `json:"llm"`
-	LLMProfiles        []LLMProfile     `json:"llm_profiles,omitempty"`
-	ActiveLLMProfileID string           `json:"active_llm_profile_id,omitempty"`
-	Credentials        Credentials      `json:"credentials"`
-	ReviewAutomation   ReviewAutomation `json:"review_automation"`
-	UpdatedAt          time.Time        `json:"updated_at,omitempty"`
+	LinkageDefaultNodeID string           `json:"linkage_default_node_id,omitempty"`
+	LLM                  LLM              `json:"llm"`
+	LLMProfiles          []LLMProfile     `json:"llm_profiles,omitempty"`
+	ActiveLLMProfileID   string           `json:"active_llm_profile_id,omitempty"`
+	Credentials          Credentials      `json:"credentials"`
+	ReviewAutomation     ReviewAutomation `json:"review_automation"`
+	UpdatedAt            time.Time        `json:"updated_at,omitempty"`
 }
 
 type Store struct {

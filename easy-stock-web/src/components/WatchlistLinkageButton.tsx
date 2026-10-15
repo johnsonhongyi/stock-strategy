@@ -355,10 +355,10 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 			</button>
 		</div>
 		<div className="watchlist-linkage-default">
-   <button type="button" disabled={!config || !selectedNode} onClick={() => {
+   <button type="button" disabled={!config || !selectedNode} onClick={async () => {
     if (!config) return;
-    try { saveLinkageDefault(config, selectedNode); setAttentionMessage('默认联动桌面已保存，下次自动使用。'); }
-    catch { setAttentionError('无法保存默认桌面'); }
+    try { await saveLinkageDefault(config, selectedNode); setAttentionMessage('默认联动桌面已保存，下次自动使用。'); }
+    catch { setAttentionError('无法保存默认桌面，请检查管理员权限或后端连接'); }
    }}>设为默认桌面</button>
    <span>{config && readLinkageDefault(config) === selectedNode && selectedNode ? '当前使用已保存的默认桌面' : '默认桌面可在系统设置中配置'} · 保存与 TK / ATS 回执分别确认</span>
    {config && readLinkageDefault(config) && !targets.some(target => target.node_id === readLinkageDefault(config)) && <span role="status">原默认节点不可用，请重新选择；不会自动改投其他节点。</span>}
