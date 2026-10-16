@@ -27,7 +27,12 @@ func OpenStore(path string) (*Store, error) {
 			return nil, fmt.Errorf("create theme radar data directory: %w", err)
 		}
 	}
-	db, err := sql.Open("sqlite", dataSource)
+	// The shared database has other writers; apply the bounded wait to every
+	// connection, including one reopened by database/sql after an I/O failure.
+	if dataSource != ":memory:" {
+		dataSource = "file:" + filepath.ToSlash(dataSource)
+	}
+	db, err := sql.Open("sqlite", dataSource+"?_pragma=busy_timeout(3000)")
 	if err != nil {
 		return nil, fmt.Errorf("open theme radar database: %w", err)
 	}
