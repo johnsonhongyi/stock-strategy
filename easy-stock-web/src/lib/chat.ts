@@ -7,6 +7,7 @@ export type ChatMessage = {
 	reasoning?: string;
 	created_at: string;
 	error?: boolean;
+	pending?: boolean;
 };
 
 export type ChatConversation = {
@@ -59,7 +60,14 @@ export function parseStoredConversations(raw: string | null): ChatConversation[]
 		if (!Array.isArray(parsed)) return [];
 		return parsed
 			.filter(isConversation)
-			.map((conversation) => ({ ...conversation, messages: conversation.messages.slice(-MAX_STORED_MESSAGES) }))
+			.map((conversation) => ({ ...conversation, messages: conversation.messages.slice(-MAX_STORED_MESSAGES).flatMap((message) => {
+				if (message.role !== 'assistant') return [message];
+				if (message.pending) {
+					if (!message.content && !message.reasoning) return [];
+					return [{ ...message, pending: false, error: true, content: (message.content || '回答未完成') + '\n\n（页面切换或重启时中断，内容可能不完整）' }];
+				}
+				return message.content || message.reasoning ? [message] : [];
+			}) }))
 			.sort((a, b) => b.updated_at.localeCompare(a.updated_at))
 			.slice(0, MAX_STORED_CONVERSATIONS);
 	} catch {
@@ -118,5 +126,6 @@ function isMessage(value: unknown): value is ChatMessage {
 		&& typeof item.content === 'string'
 		&& (item.reasoning === undefined || typeof item.reasoning === 'string')
 		&& typeof item.created_at === 'string'
-		&& (item.error === undefined || typeof item.error === 'boolean');
+		&& (item.error === undefined || typeof item.error === 'boolean')
+		&& (item.pending === undefined || typeof item.pending === 'boolean');
 }

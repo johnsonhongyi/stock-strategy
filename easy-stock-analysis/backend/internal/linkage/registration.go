@@ -233,6 +233,8 @@ func peerRouteAllowed(method, requestURI string, body []byte, workspaceID, nodeI
 		return false
 	}
 	switch {
+	case method == http.MethodGet && parsed.Path == "/api/v1/linkage/targets":
+		return parsed.RawQuery == "" && len(body) == 0
 	case method == http.MethodGet && (parsed.Path == "/api/v1/linkage/context" || parsed.Path == "/api/v1/linkage/events"):
 		return true
 	case method == http.MethodGet && parsed.Path == "/api/v1/linkage/attention":

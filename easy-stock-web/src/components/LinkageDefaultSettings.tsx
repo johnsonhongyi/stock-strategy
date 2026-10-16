@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { BackendConfig } from '../lib/backend';
 import { listLinkageTargets, type LinkageTarget } from '../lib/linkage';
 import { readLinkageDefault, saveLinkageDefault } from '../lib/linkage-default';
+import { bridgeTargetLabel } from '../lib/linkage-display';
 export function LinkageDefaultSettings({ config, open }: { config: BackendConfig | null; open: boolean }) {
  const [targets, setTargets] = useState<LinkageTarget[]>([]);
  const [selected, setSelected] = useState('');
@@ -23,7 +24,7 @@ export function LinkageDefaultSettings({ config, open }: { config: BackendConfig
    catch { setMessage('默认设置保存失败，请检查管理员权限与后端连接。'); }
   }}><option value="">不指定默认桌面</option>
    {selected && !targets.some(target => target.node_id === selected) && <option value={selected}>原默认节点不可用，请重新配置</option>}
-   {targets.map(target => <option key={target.node_id} value={target.node_id}>{target.label || target.node_id} · {target.workspace_id}</option>)}
+   {targets.map(target => <option key={target.node_id} value={target.node_id}>{bridgeTargetLabel(target)}</option>)}
   </select><p role="status">{message}</p>
  </section>;
 }

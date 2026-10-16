@@ -1,4 +1,5 @@
 import { linkageDefaultEvent, readLinkageDefault, resolveLinkageDefault, saveLinkageDefault } from '../lib/linkage-default';
+import { bridgeTargetLabel } from '../lib/linkage-display';
 import { linkageContextTTL, linkageOperationRefreshDelay } from "../lib/linkage";
 import { useEffect, useMemo, useState } from 'react';
 import { BackendRequestError, type BackendConfig } from '../lib/backend';
@@ -334,7 +335,7 @@ export function WatchlistLinkageButton({ config, symbol, tradeDate }: Props) {
 		<div className="watchlist-linkage-controls">
 			<label><span>桌面</span><select value={selectedNode} onChange={(event) => { setSelectedNode(event.target.value);  }} disabled={busy || attentionBusy || targets.length === 0 || Boolean(command && !isSettled(operation))}>
 				<option value="">{targets.length ? '选择桌面' : '暂无已配置桌面'}</option>
-				{targets.map((target) => <option key={target.node_id} value={target.node_id}>{target.label || target.node_id} · {target.status}</option>)}
+				{targets.map((target) => <option key={target.node_id} value={target.node_id}>{bridgeTargetLabel(target)} · {target.status}</option>)}
 			</select></label>
 			<button type="button" onClick={() => void submit()} disabled={!config || !normalizedSymbol || !selectedNode || busy}>
 				{busy ? '提交中…' : command && !isSettled(operation) ? '重试 / 刷新状态' : '添加到重点关注'}

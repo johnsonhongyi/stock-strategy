@@ -6,22 +6,85 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"easy-stock/backend/internal/appsettings"
 	"easy-stock/backend/internal/linkage"
 )
 
 func (s *Server) linkageTargets(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if s.linkage == nil {
 		writeError(w, http.StatusServiceUnavailable, "desktop linkage is not configured")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	targets := s.linkage.Targets()
+	response := map[string]any{
 		"schema_version":  1,
-		"targets":         s.linkage.Targets(),
+		"targets":         targets,
 		"default_node_id": s.settingsStore.Snapshot().LinkageDefaultNodeID,
-	})
+	}
+	response["chat_target"] = map[string]string{"provider": "unknown"}
+	for _, target := range targets {
+		target["online"] = "false"
+		target["desktop_status"] = "status_unavailable"
+		target["chat_queued"] = "0"
+		target["chat_running"] = "0"
+		target["chat_jobs_status"] = "status_unavailable"
+	}
+	if db, err := s.chatDB(); err == nil {
+		defer db.Close()
+		chat := loadDesktopChatConfig(db)
+		response["chat_target"] = map[string]string{
+			"provider": chat.Provider, "node_id": chat.Node, "workspace_id": chat.Workspace,
+		}
+		if stateDB, stateErr := followDB(s.autoFollowDBPath); stateErr == nil {
+			defer stateDB.Close()
+			var body string
+			if stateDB.QueryRowContext(r.Context(), "SELECT body FROM state WHERE id=1").Scan(&body) == nil {
+				var state map[string]any
+				if json.Unmarshal([]byte(body), &state) == nil {
+					if settings, ok := state["ai_settings"].(map[string]any); ok {
+						nodeID, _ := settings["node_id"].(string)
+						workspaceID, _ := settings["workspace_id"].(string)
+						if nodeID != "" && workspaceID != "" {
+							response["strategy_target"] = map[string]string{"node_id": nodeID, "workspace_id": workspaceID}
+						}
+					}
+				}
+			}
+		}
+		for _, target := range targets {
+			target["online"] = "false"
+			target["desktop_status"] = "no_heartbeat"
+			var status, heartbeat string
+			err := db.QueryRowContext(r.Context(), "SELECT status,heartbeat FROM ai_desktop WHERE node_id=? AND workspace_id=?", target["node_id"], target["workspace_id"]).Scan(&status, &heartbeat)
+			if err == nil {
+				target["desktop_status"] = status
+				target["heartbeat"] = heartbeat
+				stamp, parseErr := time.Parse(time.RFC3339Nano, heartbeat)
+				age := time.Since(stamp)
+				if parseErr == nil && age >= 0 && age <= 90*time.Second {
+					target["online"] = "true"
+				}
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				target["desktop_status"] = "status_unavailable"
+			}
+			var queued, running int
+			now := time.Now().Unix()
+			if err := db.QueryRowContext(r.Context(),
+				"SELECT COUNT(CASE WHEN status='queued' AND expires_at>? AND created_at+90>? THEN 1 END), COUNT(CASE WHEN status='running' AND expires_at>? AND lease_until>? THEN 1 END) FROM desktop_chat_jobs WHERE node_id=? AND workspace_id=? AND status IN ('queued','running')",
+				now, now, now, now, target["node_id"], target["workspace_id"],
+			).Scan(&queued, &running); err == nil {
+				target["chat_queued"] = strconv.Itoa(queued)
+				target["chat_running"] = strconv.Itoa(running)
+				target["chat_jobs_status"] = "ready"
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) linkageImportTarget(w http.ResponseWriter, r *http.Request) {

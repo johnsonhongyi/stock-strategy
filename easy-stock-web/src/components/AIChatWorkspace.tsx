@@ -1,4 +1,5 @@
 import {prepareDesktopChatRuntime,loadChatRuntime,saveChatRuntime,streamDesktopChat,type ChatRuntime} from '../lib/desktop-chat';
+import {shortBridgeIdentity} from '../lib/linkage-display';
 import { ReasoningControl } from './ReasoningControl';
 import {
 	Bot,
@@ -47,6 +48,7 @@ type ModelListState = 'idle' | 'loading' | 'ready' | 'error';
 type ModelSwitchState = 'idle' | 'switching' | 'saved' | 'error';
 type ChatLLMConfig = Pick<AppSettings['llm'], 'provider' | 'base_url' | 'model' | 'api_mode'>;
 const STORAGE_KEY = 'easy-stock.ai-conversations.v1';
+const ACTIVE_STORAGE_KEY = 'easy-stock.ai-active-conversation.v1';
 const LEGACY_STORAGE_KEY = 'a-stock-ai.ai-conversations.v1';
 const manualModelOption = '__manual_model_input__';
 
@@ -58,6 +60,15 @@ function loadStoredConversations() {
 	const conversations = parseStoredConversations(legacy);
 	window.localStorage.setItem(STORAGE_KEY, JSON.stringify(storeableConversations(conversations)));
 	return conversations;
+}
+
+function loadActiveConversationID(conversations: ChatConversation[]) {
+	try {
+		const saved = window.localStorage.getItem(ACTIVE_STORAGE_KEY);
+		return conversations.some((conversation) => conversation.id === saved) ? saved || '' : conversations[0]?.id || '';
+	} catch {
+		return conversations[0]?.id || '';
+	}
 }
 
 const starterPrompts = [
@@ -75,7 +86,7 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 			return [];
 		}
 	});
-	const [activeID, setActiveID] = useState(() => conversations[0]?.id || '');
+	const [activeID, setActiveID] = useState(() => loadActiveConversationID(conversations));
 	const [draft, setDraft] = useState('');
 	const [sending, setSending] = useState(false);
 	const [desktopRuntime,setDesktopRuntime]=useState<ChatRuntime|null>(null);
@@ -121,6 +132,15 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 	}, [conversations]);
 
 	useEffect(() => {
+		try {
+			if (activeID) window.localStorage.setItem(ACTIVE_STORAGE_KEY, activeID);
+			else window.localStorage.removeItem(ACTIVE_STORAGE_KEY);
+		} catch {
+			// The saved conversation list remains usable when browser storage is unavailable.
+		}
+	}, [activeID]);
+
+	useEffect(() => {
 		messageEndRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
 	}, [activeConversation?.messages.length, sending]);
 
@@ -161,14 +181,24 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 		setModelSwitchMessage('');
 		setManualModelEditing(false);
 		try {
-			const runtime=await loadChatRuntime(config).catch(e=>{if(e&&typeof e==='object'&&'status' in e&&(e.status===404||e.status===405))return null;throw e;});setDesktopRuntime(runtime);
+			let runtime=await loadChatRuntime(config).catch(e=>{if(e&&typeof e==='object'&&'status' in e&&(e.status===404||e.status===405))return null;throw e;});
 			if(runtime?.config.provider==='codex_desktop'){
+				try{
+						const previous=runtime.config;
+					const selected=await prepareDesktopChatRuntime(config,previous);
+					const bridgeChanged=selected.node_id!==previous.node_id||selected.workspace_id!==previous.workspace_id;
+					const changed=bridgeChanged||selected.model!==previous.model||selected.reasoning_effort!==previous.reasoning_effort;
+					if(changed){runtime=await saveChatRuntime(config,selected);setConversations(current=>clearHermesSessionIDs(current));if(bridgeChanged){setModelSwitchState('saved');setModelSwitchMessage('原桌面桥 '+shortBridgeIdentity(previous.node_id,previous.workspace_id)+' 不在线，已自动切换到活跃桥 '+shortBridgeIdentity(selected.node_id,selected.workspace_id)+'。');window.dispatchEvent(new Event('ai-runtime-failed-over'));}}
+				}catch(error){setDesktopRuntime({...runtime,online:false,models:[]});throw error;}
+				setDesktopRuntime(runtime);
 				const c=runtime.config;setLLMProfiles([]);setActiveLLMProfileID('codex:'+c.node_id+':'+c.workspace_id+':'+c.reasoning_effort);
 				setLLMConfig({provider:'codex_desktop',base_url:'',model:c.model,api_mode:'chat_completions'});
-				setModelOptions((runtime.models||[]).map(m=>({id:m.id,display_name:m.name})));setModelListState('ready');
-				setModelListMessage('桌面每日模型目录 · '+c.reasoning_effort);setModelState(runtime.online?'ready':'error');
-				setModelLabel(runtime.online?'桌面 Codex · '+c.model+' / '+c.reasoning_effort:'桌面 Codex 离线，请检查独立桥');return;
+				const usable=runtime.online&&runtime.models.some(m=>m.id&&m.efforts.length>0);
+				setModelOptions((runtime.models||[]).map(m=>({id:m.id,display_name:m.name})));setModelListState(usable?'ready':'error');
+				setModelListMessage(usable?'桌面每日模型目录 · '+c.reasoning_effort:'当前 ATS 工作区没有可用模型');setModelState(usable?'ready':'error');
+				setModelLabel(usable?'桌面 Codex · '+shortBridgeIdentity(c.node_id,c.workspace_id)+' · '+c.model+' / '+c.reasoning_effort:runtime.message||'桌面 Codex 不可用');return;
 			}
+			setDesktopRuntime(runtime);
 			const payload = await requestJSON<{ data: AppSettings }>(config, '/api/v1/settings');
 			const { hermes, llm } = payload.data;
 			const profiles = payload.data.llm_profiles || [];
@@ -207,6 +237,48 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 	useEffect(() => {
 		void loadModel();
 	}, [loadModel, refreshKey]);
+
+	const pollDesktopBridge = useCallback(async () => {
+		const current = desktopRuntime;
+		if (!config || current?.config.provider !== 'codex_desktop' || sending || modelSwitchState === 'switching') return;
+		try {
+			const previous = current.config;
+			const selected = await prepareDesktopChatRuntime(config, previous);
+			const bridgeChanged = selected.node_id !== previous.node_id || selected.workspace_id !== previous.workspace_id;
+			const changed = bridgeChanged || selected.model !== previous.model || selected.reasoning_effort !== previous.reasoning_effort;
+			const runtime = changed ? await saveChatRuntime(config, selected) : await loadChatRuntime(config, selected.node_id, selected.workspace_id);
+			setDesktopRuntime(runtime);
+			const usable = runtime.online && runtime.models.some(model => model.id && model.efforts.length > 0);
+			setModelState(usable ? 'ready' : 'error');
+			setModelListState(usable ? 'ready' : 'error');
+			setModelListMessage(usable ? '桌面每日模型目录 · ' + runtime.config.reasoning_effort : '当前桥没有可用模型');
+			setModelLabel(usable ? '桌面 Codex · ' + shortBridgeIdentity(runtime.config.node_id, runtime.config.workspace_id) + ' · ' + runtime.config.model + ' / ' + runtime.config.reasoning_effort : runtime.message || '桌面 Codex 不可用');
+			if (!bridgeChanged && modelSwitchState === 'error') { setModelSwitchState('idle'); setModelSwitchMessage(''); }
+			if (bridgeChanged) {
+				setConversations(value => clearHermesSessionIDs(value));
+				setModelSwitchState('saved');
+				setModelSwitchMessage('原桌面桥 ' + shortBridgeIdentity(previous.node_id, previous.workspace_id) + ' 不在线，已自动切换到活跃桥 ' + shortBridgeIdentity(runtime.config.node_id, runtime.config.workspace_id) + '。');
+				window.dispatchEvent(new Event('ai-runtime-failed-over'));
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (message.includes('没有在线且有可用模型的 Codex 桥') || message.includes('没有支持 AI 对话的在线 Codex 桌面')) {
+				setDesktopRuntime({ ...current, online: false, models: [] });
+				setModelState('error');
+				setModelListState('error');
+				setModelLabel(message);
+			} else {
+				setModelSwitchState('error');
+				setModelSwitchMessage('桥状态复核失败：' + message);
+			}
+		}
+	}, [config, desktopRuntime, modelSwitchState, sending]);
+
+	useEffect(() => {
+		if (!config || desktopRuntime?.config.provider !== 'codex_desktop' || sending || modelSwitchState === 'switching') return;
+		const timer = window.setInterval(() => void pollDesktopBridge(), 30000);
+		return () => window.clearInterval(timer);
+	}, [config, desktopRuntime?.config.provider, modelSwitchState, pollDesktopBridge, sending]);
 
 	useEffect(()=>{const changed=()=>{void loadModel();};window.addEventListener('ai-runtime-changed',changed);return()=>window.removeEventListener('ai-runtime-changed',changed);},[loadModel]);
 
@@ -263,8 +335,9 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
   try {
    let next = {...desktopRuntime.config,...change};
    if (next.provider === 'codex_desktop') next = await prepareDesktopChatRuntime(config,next);
+   const moved=next.provider==='codex_desktop'&&(next.node_id!==desktopRuntime.config.node_id||next.workspace_id!==desktopRuntime.config.workspace_id);
    await saveChatRuntime(config,next); await loadModel();
-   setModelSwitchState('saved'); setModelSwitchMessage('已保存，刷新后自动恢复；下一条消息生效。');
+   setModelSwitchState('saved'); setModelSwitchMessage(moved?'已自动选择活跃桥 '+shortBridgeIdentity(next.node_id,next.workspace_id)+'，下一条消息生效。':'已保存，刷新后自动恢复；下一条消息生效。');
   } catch (error) { setModelSwitchState('error'); setModelSwitchMessage(error instanceof Error ? error.message : '对话配置保存失败'); }
  };
 
@@ -338,6 +411,17 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 		window.setTimeout(() => textareaRef.current?.focus(), 0);
 	};
 
+	const clearAllConversations = () => {
+		if (!conversations.length || !window.confirm('确定删除本机保存的全部 AI 对话记录？此操作不可恢复。')) return;
+		abortRef.current?.abort();
+		setSending(false);
+		setPendingMessageID('');
+		setDraft('');
+		setConversations([]);
+		setActiveID('');
+		try { window.localStorage.removeItem(STORAGE_KEY); window.localStorage.removeItem(ACTIVE_STORAGE_KEY); } catch { /* State will still clear for this page. */ }
+	};
+
 	const deleteConversation = (id: string) => {
 		if (sending && id === activeID) abortRef.current?.abort();
 		setConversations((current) => {
@@ -378,6 +462,7 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 			role: 'assistant',
 			content: '',
 			created_at: now,
+			pending: true,
 		};
 		setPendingMessageID(assistantID);
 		setConversations((items) => items.map((conversation) => conversation.id === pendingConversation.id
@@ -422,18 +507,18 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 			});
 			const completedAt = new Date().toISOString();
 			setConversations((items) => items.map((conversation) => conversation.id === pendingConversation.id
-				? { ...conversation, hermes_session_id: result.hermesSessionID || conversation.hermes_session_id, hermes_model_key: modelKey, messages: conversation.messages.map((message) => message.id === assistantID ? { ...message, content: result.content, reasoning: result.reasoning || message.reasoning, created_at: completedAt } : message), updated_at: completedAt }
+				? { ...conversation, hermes_session_id: result.hermesSessionID || conversation.hermes_session_id, hermes_model_key: modelKey, messages: conversation.messages.map((message) => message.id === assistantID ? { ...message, content: result.content, reasoning: result.reasoning || message.reasoning, created_at: completedAt, pending: false } : message), updated_at: completedAt }
 				: conversation));
 			setModelState('ready');
 		} catch (error) {
 			if ((error as Error)?.name !== 'AbortError') {
 				const failedAt = new Date().toISOString();
 				setConversations((items) => items.map((conversation) => conversation.id === pendingConversation.id
-					? { ...conversation, messages: conversation.messages.map((message) => message.id === assistantID ? { ...message, content: error instanceof Error ? error.message : 'AI 对话请求失败，请稍后重试。', created_at: failedAt, error: true } : message), updated_at: failedAt }
+					? { ...conversation, messages: conversation.messages.map((message) => message.id === assistantID ? { ...message, content: error instanceof Error ? error.message : 'AI 对话请求失败，请稍后重试。', created_at: failedAt, error: true, pending: false } : message), updated_at: failedAt }
 					: conversation));
 			} else {
 				setConversations((items) => items.map((conversation) => conversation.id === pendingConversation.id
-					? { ...conversation, messages: conversation.messages.filter((message) => message.id !== assistantID || message.content || message.reasoning) }
+					? { ...conversation, messages: conversation.messages.filter((message) => message.id !== assistantID || message.content || message.reasoning).map((message) => message.id === assistantID ? { ...message, pending: false } : message) }
 					: conversation));
 			}
 		} finally {
@@ -481,7 +566,7 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 	return (
 		<section className="ai-chat-workspace">
 			<aside className="ai-thread-rail">
-				<header><div><span>AI WORKSPACE</span><strong>对话记录</strong></div><button type="button" onClick={newConversation} title="新建对话"><MessageSquarePlus size={17} /></button></header>
+				<header><div><span>AI WORKSPACE</span><strong>对话记录</strong></div><button type="button" className="clear-all" onClick={clearAllConversations} disabled={!conversations.length} title="清空全部对话" aria-label="清空全部对话"><Trash2 size={16} /></button><button type="button" onClick={newConversation} title="新建对话" aria-label="新建对话"><MessageSquarePlus size={17} /></button></header>
 				<div className="ai-thread-list">
 					{conversations.map((conversation) => (
 						<button type="button" className={conversation.id === activeID ? 'active' : ''} onClick={() => setActiveID(conversation.id)} key={conversation.id}>
@@ -492,7 +577,7 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 					))}
 					{!conversations.length && <div className="ai-thread-empty"><Bot size={22} /><span>新对话会保存在本机</span></div>}
 				</div>
-				<div className="ai-local-note"><span className={`status-dot ${modelState}`} /><div><strong>{modelLabel}</strong><small>对话历史保存在当前设备</small></div></div>
+				<div className="ai-local-note"><span className={`status-dot ${modelState}`} /><div><strong>{modelLabel}</strong><small>保存在本机浏览器 · 最多 30 个会话</small></div></div>
 			</aside>
 
 			<div className="ai-conversation-panel">
