@@ -7,8 +7,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -24,6 +24,8 @@ func (s *Server) autoFollowAIPeer(w http.ResponseWriter, r *http.Request) {
 		Status      string          `json:"status"`
 		Detail      json.RawMessage `json:"detail"`
 		Result      json.RawMessage `json:"result"`
+		WaitMS      int             `json:"wait_ms"`
+		PreferChat  bool            `json:"prefer_chat"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 192<<10))
 	decoder.DisallowUnknownFields()
@@ -36,30 +38,59 @@ func (s *Server) autoFollowAIPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	operation := strings.TrimPrefix(r.URL.Path, "/api/v1/linkage/strategy/")
+	if operation == "next" {
+		s.desktopNext(w, r, input.NodeID, input.WorkspaceID, input.WaitMS, input.PreferChat)
+		return
+	}
 	if operation == "chat_claim" || operation == "chat_result" {
-		db, err := s.chatDB()
+		db, err := s.desktopDB()
 		if err != nil {
 			writeError(w, 503, "desktop chat unavailable")
 			return
 		}
-		defer db.Close()
 		response, err := desktopChatPeer(db, operation, input.NodeID, input.WorkspaceID, input.ID, input.LeaseToken, input.Status, input.Result)
 		if err != nil {
-			writeError(w, 409, "desktop chat lease or result rejected")
+			writeDesktopPeerError(w, err)
 			return
 		}
+		s.desktopSignals.notify("chat:" + input.ID)
 		writeJSON(w, 200, response)
 		return
 	}
-	db, err := followDB(filepath.Join(filepath.Dir(s.autoFollowDBPath), "control.db"))
+	db, err := s.desktopDB()
 	if err != nil {
 		writeError(w, 503, "AI queue unavailable")
 		return
 	}
-	defer db.Close()
 	now := time.Now()
 	at := now.UTC().Format(time.RFC3339Nano)
 	switch strings.TrimPrefix(r.URL.Path, "/api/v1/linkage/strategy/") {
+	case "lease":
+		var expires string
+		if err = db.QueryRowContext(r.Context(), "SELECT expires_at FROM ai_jobs WHERE id=? AND node_id=? AND workspace_id=? AND status='running' AND lease_token=? AND CAST(lease_until AS INTEGER)>?", input.ID, input.NodeID, input.WorkspaceID, input.LeaseToken, now.Unix()).Scan(&expires); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeDesktopPeerError(w, desktopPeerFailure{"STRATEGY_LEASE_INACTIVE", 409})
+			} else {
+				writeDesktopPeerError(w, err)
+			}
+			return
+		}
+		expiry, e := time.Parse(time.RFC3339Nano, expires)
+		if e != nil || !expiry.After(now) {
+			writeDesktopPeerError(w, desktopPeerFailure{"STRATEGY_EXPIRED", 409})
+			return
+		}
+		updated, e := db.ExecContext(r.Context(), "UPDATE ai_jobs SET lease_until=? WHERE id=? AND node_id=? AND workspace_id=? AND status='running' AND lease_token=? AND CAST(lease_until AS INTEGER)>?", now.Add(360*time.Second).Unix(), input.ID, input.NodeID, input.WorkspaceID, input.LeaseToken, now.Unix())
+		if e != nil {
+			writeDesktopPeerError(w, e)
+			return
+		}
+		n, _ := updated.RowsAffected()
+		if n != 1 {
+			writeDesktopPeerError(w, desktopPeerFailure{"STRATEGY_LEASE_INACTIVE", 409})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"status": "stored"})
 	case "heartbeat":
 		if (input.Status != "ready" && input.Status != "analyzing" && input.Status != "degraded") || len(input.Detail) > 16384 {
 			writeError(w, 400, "invalid desktop status")

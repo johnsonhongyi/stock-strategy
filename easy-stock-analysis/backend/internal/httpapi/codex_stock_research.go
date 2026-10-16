@@ -29,51 +29,56 @@ type stockResearchCodexPrompter struct {
 	identity  string
 }
 
-func (s *Server) stockResearchCodexIdentity(request stockanalysis.ResearchRequest) (string, error) {
-	db, err := s.chatDB()
-	if err != nil {
-		return "", errors.New("Codex Desktop 运行时不可用")
-	}
-	defer db.Close()
+func (s *Server) stockResearchDesktopConfig(db *sql.DB, request stockanalysis.ResearchRequest) (desktopChatConfig, error) {
 	cfg := loadDesktopChatConfig(db)
-	models, online := desktopChatCatalog(db, cfg)
-	if !online || s.linkage == nil || !s.linkage.IsConfiguredTarget(cfg.Workspace, cfg.Node) {
-		return "", errors.New("Codex Desktop 桌面节点未连接")
+	if (request.DesktopNodeID == "") != (request.DesktopWorkspaceID == "") {
+		return cfg, errors.New("Codex Desktop 个股研究桥标识不完整")
+	}
+	if request.DesktopNodeID != "" {
+		cfg.Node, cfg.Workspace = request.DesktopNodeID, request.DesktopWorkspaceID
+	}
+	if s.linkage == nil || !s.linkage.IsConfiguredTarget(cfg.Workspace, cfg.Node) {
+		return cfg, errors.New("Codex Desktop 个股研究桥未登记")
+	}
+	models, online := desktopStockResearchCatalog(db, cfg)
+	if !online {
+		return cfg, errors.New("没有在线且支持个股研究的桌面桥")
 	}
 	selection := cfg
 	selection.Model, selection.Effort = request.Model, request.ReasoningEffort
 	if !validDesktopSelection(selection, models) {
-		return "", errors.New("所选 Codex 模型或思考强度已不受当前桌面支持")
+		return cfg, errors.New("所选 Codex 模型或思考强度已不受当前个股研究桥支持")
+	}
+	return cfg, nil
+}
+
+func (s *Server) stockResearchCodexIdentity(request stockanalysis.ResearchRequest) (string, error) {
+	db, err := s.desktopDB()
+	if err != nil {
+		return "", errors.New("Codex Desktop 运行时不可用")
+	}
+	cfg, err := s.stockResearchDesktopConfig(db, request)
+	if err != nil {
+		return "", err
 	}
 	identity, _ := json.Marshal([]string{"codex_desktop", cfg.Node, cfg.Workspace, request.Model, request.ReasoningEffort})
 	return string(identity), nil
 }
-
 func (s *Server) newStockResearchCodexPrompter(request stockanalysis.ResearchRequest) (*stockResearchCodexPrompter, error) {
-	db, err := s.chatDB()
+	db, err := s.desktopDB()
 	if err != nil {
 		return nil, errors.New("Codex Desktop 对话队列不可用")
 	}
-	cfg := loadDesktopChatConfig(db)
-	models, online := desktopChatCatalog(db, cfg)
-	if !online || s.linkage == nil || !s.linkage.IsConfiguredTarget(cfg.Workspace, cfg.Node) {
-		db.Close()
-		return nil, errors.New("Codex Desktop 桌面节点未连接")
-	}
-	selection := cfg
-	selection.Model, selection.Effort = request.Model, request.ReasoningEffort
-	if !validDesktopSelection(selection, models) {
-		db.Close()
-		return nil, errors.New("所选 Codex 模型或思考强度已不受当前桌面支持")
+	cfg, err := s.stockResearchDesktopConfig(db, request)
+	if err != nil {
+		return nil, err
 	}
 	session := chatID()
 	if session == "" {
-		db.Close()
 		return nil, errors.New("Codex Desktop 研究会话创建失败")
 	}
 	owner := "stock-research-" + session
 	if _, err = db.Exec("INSERT INTO desktop_chat_sessions(id,owner,node_id,workspace_id,model,effort) VALUES(?,?,?,?,?,?)", session, owner, cfg.Node, cfg.Workspace, request.Model, request.ReasoningEffort); err != nil {
-		db.Close()
 		return nil, errors.New("Codex Desktop 研究会话保存失败")
 	}
 	identity, _ := json.Marshal([]string{"codex_desktop", cfg.Node, cfg.Workspace, request.Model, request.ReasoningEffort})
@@ -82,7 +87,6 @@ func (s *Server) newStockResearchCodexPrompter(request stockanalysis.ResearchReq
 		node: cfg.Node, workspace: cfg.Workspace, owner: owner, session: session, identity: string(identity),
 	}, nil
 }
-
 func (p *stockResearchCodexPrompter) Prompt(ctx context.Context, prompt string) (hermes.PromptResult, error) {
 	return p.PromptWithOptions(ctx, prompt, hermes.PromptOptions{Sandbox: true, AutoApprove: true, DisableTools: true})
 }
@@ -101,11 +105,17 @@ func (p *stockResearchCodexPrompter) PromptWithOptions(ctx context.Context, prom
 	if jobID == "" {
 		return hermes.PromptResult{}, errors.New("Codex Desktop 研究任务创建失败")
 	}
+	deadline := time.Now().Add(stockanalysis.ResearchStageTimeout(p.request))
+	if parent, ok := ctx.Deadline(); ok && parent.Before(deadline) {
+		deadline = parent
+	}
 	body, err := json.Marshal(map[string]any{
 		"prompt": prompt, "messages": []any{}, "thread_id": p.thread,
 		"model": p.model, "reasoning_effort": p.effort, "purpose": stockResearchCodexPurpose,
 		"symbol": p.request.Symbol, "analysis_level": p.request.AnalysisLevel,
-		"timeout_seconds": int(stockanalysis.ResearchStageTimeout(p.request).Seconds()),
+		"timeout_seconds":  int(stockanalysis.ResearchStageTimeout(p.request).Seconds()),
+		"deadline_unix_ms": deadline.UnixMilli(),
+		"enqueued_unix_ms": time.Now().UnixMilli(),
 	})
 	if err != nil {
 		return hermes.PromptResult{}, errors.New("Codex Desktop 研究任务编码失败")
@@ -133,12 +143,19 @@ func (p *stockResearchCodexPrompter) PromptWithOptions(ctx context.Context, prom
 	if err = tx.Commit(); err != nil {
 		return hermes.PromptResult{}, errors.New("Codex Desktop 研究任务提交失败")
 	}
+	p.server.desktopSignals.notify(desktopNodeKey(p.node, p.workspace))
 
-	ticker := time.NewTicker(250 * time.Millisecond)
+	wake, unsubscribe, ok := p.server.desktopSignals.subscribe("chat:" + jobID)
+	if !ok {
+		return hermes.PromptResult{}, errors.New("Codex Desktop 等待订阅已满")
+	}
+	defer unsubscribe()
+	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {
 		if ctx.Err() != nil {
 			_, _ = p.db.Exec("UPDATE desktop_chat_jobs SET status='cancelled' WHERE id=? AND owner=? AND status IN ('queued','running')", jobID, p.owner)
+			p.server.desktopSignals.notify("chat:" + jobID)
 			return hermes.PromptResult{}, ctx.Err()
 		}
 		var status, raw string
@@ -179,7 +196,9 @@ func (p *stockResearchCodexPrompter) PromptWithOptions(ctx context.Context, prom
 		select {
 		case <-ctx.Done():
 			_, _ = p.db.Exec("UPDATE desktop_chat_jobs SET status='cancelled' WHERE id=? AND owner=? AND status IN ('queued','running')", jobID, p.owner)
+			p.server.desktopSignals.notify("chat:" + jobID)
 			return hermes.PromptResult{}, ctx.Err()
+		case <-wake:
 		case <-ticker.C:
 		}
 	}
@@ -190,8 +209,8 @@ func (p *stockResearchCodexPrompter) Close() {
 		return
 	}
 	_, _ = p.db.Exec("UPDATE desktop_chat_jobs SET status='cancelled' WHERE session_id=? AND owner=? AND status IN ('queued','running')", p.session, p.owner)
-	_, _ = p.db.Exec("DELETE FROM desktop_chat_jobs WHERE session_id=? AND owner=?", p.session, p.owner)
-	_, _ = p.db.Exec("DELETE FROM desktop_chat_sessions WHERE id=? AND owner=?", p.session, p.owner)
-	_ = p.db.Close()
+	_, _ = p.db.Exec("DELETE FROM desktop_chat_sessions WHERE id=? AND owner=? AND NOT EXISTS (SELECT 1 FROM desktop_chat_jobs WHERE session_id=?)", p.session, p.owner, p.session)
+	// Retain terminal/cancelled rows as tombstones for late results and diagnostics.
+	// Bounded expiry cleanup is performed during later claims.
 	p.db = nil
 }

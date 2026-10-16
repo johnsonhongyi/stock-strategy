@@ -711,9 +711,9 @@ func promptJSONObjectWithOptions[T any](ctx context.Context, prompter hermes.Pro
 				options.onAttempt(diagnostic)
 			}
 			if attempt == 1 {
-				return decoded, fmt.Errorf("Hermes%s失败: %w", label, callErr)
+				return decoded, fmt.Errorf("AI%s失败: %w", label, callErr)
 			}
-			return decoded, fmt.Errorf("Hermes未返回有效%sJSON: %v；自动纠错失败: %w", label, firstDecodeErr, callErr)
+			return decoded, fmt.Errorf("AI未返回有效%sJSON: %v；自动纠错失败: %w", label, firstDecodeErr, callErr)
 		}
 
 		decoded = *new(T)

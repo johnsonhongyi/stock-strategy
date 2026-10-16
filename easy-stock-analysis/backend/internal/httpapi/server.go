@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +43,10 @@ import (
 )
 
 type Server struct {
+	desktopDBMu           sync.Mutex
+	desktopChatDB         *sql.DB
+	desktopPrunedAt       time.Time
+	desktopSignals        desktopSignals
 	autoFollowDBPath      string
 	webAuth               *webAuthStore
 	linkageContextMu      sync.Mutex
@@ -482,6 +487,13 @@ func (s *Server) Close() error {
 	if s.stockResearch != nil {
 		s.stockResearch.Close()
 	}
+	s.desktopSignals.close()
+	s.desktopDBMu.Lock()
+	if s.desktopChatDB != nil {
+		closeErrors = append(closeErrors, s.desktopChatDB.Close())
+		s.desktopChatDB = nil
+	}
+	s.desktopDBMu.Unlock()
 	if s.stockResearchStore != nil {
 		closeErrors = append(closeErrors, s.stockResearchStore.Close())
 	}
@@ -615,7 +627,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.health)
 	s.mux.HandleFunc("GET /api/v1/system/status", s.systemStatus)
 	s.mux.HandleFunc("GET /api/v1/auto-follow", s.autoFollowStatus)
-	for _, operation := range []string{"claim", "result", "heartbeat", "chat_claim", "chat_result"} {
+	for _, operation := range []string{"claim", "result", "heartbeat", "chat_claim", "chat_result", "next", "lease"} {
 		s.mux.HandleFunc("POST /api/v1/linkage/strategy/"+operation, s.autoFollowAIPeer)
 	}
 	s.mux.HandleFunc("POST /api/v1/auto-follow/commands", s.autoFollowCommand)
@@ -661,6 +673,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/stocks/research", s.stockResearchCreate)
 	s.mux.HandleFunc("GET /api/v1/stocks/research", s.stockResearchList)
 	s.mux.HandleFunc("GET /api/v1/stocks/research/{id}", s.stockResearchGet)
+	s.mux.HandleFunc("GET /api/v1/stocks/research/{id}/events", s.stockResearchEvents)
 	s.mux.HandleFunc("DELETE /api/v1/stocks/research/{id}", s.stockResearchDelete)
 	s.mux.HandleFunc("POST /api/v1/stocks/research/{id}/cancel", s.stockResearchCancel)
 	s.mux.HandleFunc("POST /api/v1/stocks/research/{id}/verify", s.stockResearchVerify)
@@ -714,6 +727,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/v1/ai/runtime", s.desktopChatRuntime)
 	s.mux.HandleFunc("POST /api/v1/ai/desktop/jobs", s.desktopChatJob)
 	s.mux.HandleFunc("GET /api/v1/ai/desktop/jobs/{id}", s.desktopChatJob)
+	s.mux.HandleFunc("GET /api/v1/ai/desktop/jobs/{id}/events", s.desktopChatEvents)
 	s.mux.HandleFunc("DELETE /api/v1/ai/desktop/jobs/{id}", s.desktopChatJob)
 	s.mux.HandleFunc("POST /api/v1/strategy/inflections/evaluate", s.inflectionEvaluate)
 	s.mux.HandleFunc("GET /api/v1/ws/stream", s.stream)

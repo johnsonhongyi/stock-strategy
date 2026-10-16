@@ -34,7 +34,7 @@ func aiPeerFixture(t *testing.T) (*Server, func(string, map[string]any) *httptes
 		t.Fatal(err)
 	}
 	s.linkage = service
-	t.Cleanup(func() { _ = service.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	exec := func(q string, args ...any) {
 		t.Helper()
 		if _, e := db.Exec(q, args...); e != nil {

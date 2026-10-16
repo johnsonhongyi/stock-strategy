@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { requestJSON, type BackendConfig } from './backend';
+import { streamTaskSnapshots } from './task-events';
 import { isResearchRunning, type ResearchJob, type ResearchJobSummary, type ResearchRequest, type ResearchVerification } from './stock-research';
 
 const selectionKey = 'easy-stock.stock-research.selected.v1';
@@ -46,7 +47,19 @@ export function useStockResearch(config: BackendConfig | null) {
 				if (++failures < 5) timer = setTimeout(poll, 3000);
 			}
 		};
-		void poll();
+		void (async () => {
+			try {
+				const terminal = await streamTaskSnapshots<ResearchJob>(config, `/api/v1/stocks/research/${selectedID}/events`, value => {
+					if (controller.signal.aborted || currentSequence !== sequence.current) return true;
+					if (!sameResearchJob(latestJob.current, value)) { latestJob.current = value; setJob(value); }
+					setError(''); failures = 0;
+					if (!isResearchRunning(value)) { void refreshHistory(); return true; }
+					return false;
+				}, controller.signal);
+				if (terminal || controller.signal.aborted) return;
+			} catch { if (controller.signal.aborted) return; }
+			await poll();
+		})();
 		return () => { controller.abort(); if (timer) clearTimeout(timer); };
 	}, [config, selectedID, selectionVersion, refreshHistory]);
 

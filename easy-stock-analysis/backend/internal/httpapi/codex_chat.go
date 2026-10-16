@@ -42,7 +42,10 @@ func (s *Server) chatDB() (*sql.DB, error) {
 	}
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS desktop_chat_config(id INTEGER PRIMARY KEY,body TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS desktop_chat_sessions(id TEXT PRIMARY KEY,owner TEXT NOT NULL,node_id TEXT NOT NULL,workspace_id TEXT NOT NULL,model TEXT NOT NULL,effort TEXT NOT NULL,thread_id TEXT NOT NULL DEFAULT '');
- CREATE TABLE IF NOT EXISTS desktop_chat_jobs(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,owner TEXT NOT NULL,node_id TEXT NOT NULL,workspace_id TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,lease_token TEXT NOT NULL DEFAULT '',lease_until INTEGER NOT NULL DEFAULT 0,result TEXT NOT NULL DEFAULT '{}');`)
+ CREATE TABLE IF NOT EXISTS desktop_chat_jobs(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,owner TEXT NOT NULL,node_id TEXT NOT NULL,workspace_id TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,lease_token TEXT NOT NULL DEFAULT '',lease_until INTEGER NOT NULL DEFAULT 0,result TEXT NOT NULL DEFAULT '{}');
+ CREATE INDEX IF NOT EXISTS desktop_chat_claim ON desktop_chat_jobs(node_id,workspace_id,status,created_at);
+ CREATE INDEX IF NOT EXISTS desktop_chat_session ON desktop_chat_jobs(session_id,status,expires_at);
+ CREATE INDEX IF NOT EXISTS desktop_chat_expiry ON desktop_chat_jobs(expires_at);`)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -57,7 +60,7 @@ func loadDesktopChatConfig(db *sql.DB) desktopChatConfig {
 	}
 	return c
 }
-func desktopChatCatalog(db *sql.DB, c desktopChatConfig) ([]desktopChatModel, bool) {
+func desktopCatalogForCapability(db *sql.DB, c desktopChatConfig, required string) ([]desktopChatModel, bool) {
 	var status, at, detail string
 	var data struct {
 		Models       []desktopChatModel `json:"models"`
@@ -77,14 +80,31 @@ func desktopChatCatalog(db *sql.DB, c desktopChatConfig) ([]desktopChatModel, bo
 	if json.Unmarshal([]byte(detail), &data) != nil {
 		return nil, false
 	}
-	supportsChat := false
-	for _, capability := range data.Capabilities {
-		if capability == "ai_chat_v1" {
-			supportsChat = true
+	has := func(want string) bool {
+		for _, capability := range data.Capabilities {
+			if capability == want {
+				return true
+			}
 		}
+		return false
 	}
-	return data.Models, supportsChat
+	supported := has(required)
+	// Older manager bridges advertise the two underlying protocols rather than
+	// the combined stock-research capability. They can still serve this queue.
+	if required == "stock_research_v1" && !supported {
+		supported = has("strategy_research") && has("ai_chat_v1")
+	}
+	return data.Models, supported
 }
+
+func desktopChatCatalog(db *sql.DB, c desktopChatConfig) ([]desktopChatModel, bool) {
+	return desktopCatalogForCapability(db, c, "ai_chat_v1")
+}
+
+func desktopStockResearchCatalog(db *sql.DB, c desktopChatConfig) ([]desktopChatModel, bool) {
+	return desktopCatalogForCapability(db, c, "stock_research_v1")
+}
+
 func validDesktopSelection(c desktopChatConfig, models []desktopChatModel) bool {
 	for _, m := range models {
 		if m.ID == c.Model {
@@ -98,14 +118,25 @@ func validDesktopSelection(c desktopChatConfig, models []desktopChatModel) bool 
 	return false
 }
 func (s *Server) desktopChatRuntime(w http.ResponseWriter, r *http.Request) {
-	db, err := s.chatDB()
+	db, err := s.desktopDB()
 	if err != nil {
 		writeError(w, 503, "AI运行时设置不可用")
 		return
 	}
-	defer db.Close()
 	c := loadDesktopChatConfig(db)
+	capability := r.URL.Query().Get("capability")
+	if capability == "" {
+		capability = "ai_chat_v1"
+	}
+	if capability != "ai_chat_v1" && capability != "stock_research_v1" {
+		writeError(w, 400, "不支持的桌面桥能力")
+		return
+	}
 	if r.Method == http.MethodPut {
+		if capability != "ai_chat_v1" {
+			writeError(w, 400, "个股研究运行时不能修改 AI 对话全局设置")
+			return
+		}
 		if !s.followCanControl(r) || (r.Header.Get("Origin") != "" && !webSameOrigin(r)) {
 			writeError(w, 403, "需要管理员权限")
 			return
@@ -129,14 +160,21 @@ func (s *Server) desktopChatRuntime(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Allow settings to inspect a registered node before saving a selection.
+	// Allow each workspace to inspect its own capability without changing the
+	// independent global AI-conversation runtime selection.
 	catalogConfig := c
 	if node := r.URL.Query().Get("node_id"); node != "" {
 		catalogConfig.Node = node
 		catalogConfig.Workspace = r.URL.Query().Get("workspace_id")
 	}
-	models, online := desktopChatCatalog(db, catalogConfig)
-	writeJSON(w, 200, map[string]any{"data": map[string]any{"config": c, "models": models, "online": online, "credential_mode": "desktop_login", "scope": "ai-chat", "message": "Codex登录凭据仅保留在桌面；Hermes技能与MCP配置不自动转交"}})
+	catalog := desktopChatCatalog
+	scope := "ai-chat"
+	if capability == "stock_research_v1" {
+		catalog = desktopStockResearchCatalog
+		scope = "stock-research"
+	}
+	models, online := catalog(db, catalogConfig)
+	writeJSON(w, 200, map[string]any{"data": map[string]any{"config": c, "models": models, "online": online, "capability": capability, "credential_mode": "desktop_login", "scope": scope, "message": "Codex登录凭据仅保留在桌面；Hermes技能与MCP配置不自动转交"}})
 }
 func (s *Server) desktopChatOwner(r *http.Request) string {
 	if s.webAuth != nil {
@@ -156,12 +194,11 @@ func (s *Server) desktopChatJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "需要登录并使用同源对话入口")
 		return
 	}
-	db, err := s.chatDB()
+	db, err := s.desktopDB()
 	if err != nil {
 		writeError(w, 503, "对话队列不可用")
 		return
 	}
-	defer db.Close()
 	owner := s.desktopChatOwner(r)
 	now := time.Now().Unix()
 	if r.Method == http.MethodPost {
@@ -265,7 +302,7 @@ func (s *Server) desktopChatJob(w http.ResponseWriter, r *http.Request) {
 			} `json:"params"`
 		}
 		_ = json.Unmarshal(frame, &enriched)
-		body, _ := json.Marshal(map[string]any{"prompt": enriched.Params.Text, "messages": input.Messages, "thread_id": thread, "model": c.Model, "reasoning_effort": c.Effort, "bridge_test": input.BridgeTest})
+		body, _ := json.Marshal(map[string]any{"prompt": enriched.Params.Text, "messages": input.Messages, "thread_id": thread, "model": c.Model, "reasoning_effort": c.Effort, "bridge_test": input.BridgeTest, "enqueued_unix_ms": time.Now().UnixMilli()})
 		id := chatID()
 		if id == "" {
 			writeError(w, 503, "任务创建失败")
@@ -279,7 +316,8 @@ func (s *Server) desktopChatJob(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 503, "任务保存失败")
 			return
 		}
-		writeJSON(w, 202, map[string]any{"data": map[string]any{"id": id, "session_id": sid, "status": "queued"}})
+		s.desktopSignals.notify(desktopNodeKey(c.Node, c.Workspace))
+		writeJSON(w, 202, map[string]any{"data": map[string]any{"id": id, "session_id": sid, "status": "queued", "stream_events": true}})
 		return
 	}
 	id := r.PathValue("id")
@@ -289,6 +327,7 @@ func (s *Server) desktopChatJob(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 503, "停止失败")
 			return
 		}
+		s.desktopSignals.notify("chat:" + id)
 	}
 	var status, raw, sid, body string
 	var expires, createdAt int64
@@ -311,7 +350,7 @@ func (s *Server) desktopChatJob(w http.ResponseWriter, r *http.Request) {
 	var testJob struct {
 		BridgeTest bool `json:"bridge_test"`
 	}
-	if r.Method == http.MethodDelete && json.Unmarshal([]byte(body), &testJob) == nil && testJob.BridgeTest && status != "queued" && status != "running" {
+	if r.Method == http.MethodDelete && json.Unmarshal([]byte(body), &testJob) == nil && testJob.BridgeTest && (status == "completed" || status == "failed") {
 		_, _ = db.Exec("DELETE FROM desktop_chat_jobs WHERE id=? AND owner=?", id, owner)
 		_, _ = db.Exec("DELETE FROM desktop_chat_sessions WHERE id=? AND owner=?", sid, owner)
 	}
@@ -350,10 +389,32 @@ func desktopChatPeer(db *sql.DB, operation, node, workspace, id, token, status s
 		if tx.Commit() != nil {
 			return nil, errors.New("lease commit failed")
 		}
-		return map[string]any{"job": map[string]any{"id": id, "lease_token": token, "context": json.RawMessage(raw)}}, nil
+		remaining := 300.0
+		var budget struct {
+			Deadline   int64 `json:"deadline_unix_ms"`
+			Timeout    int   `json:"timeout_seconds"`
+			BridgeTest bool  `json:"bridge_test"`
+			Enqueued   int64 `json:"enqueued_unix_ms"`
+		}
+		if json.Unmarshal([]byte(raw), &budget) == nil {
+			if budget.Timeout > 0 {
+				remaining = float64(budget.Timeout)
+			}
+			if budget.BridgeTest {
+				remaining = 120
+			}
+			if budget.Deadline > 0 {
+				remaining = min(remaining, float64(budget.Deadline-time.Now().UnixMilli())/1000)
+			}
+		}
+		queueWait := int64(0)
+		if budget.Enqueued > 0 {
+			queueWait = max(0, time.Now().UnixMilli()-budget.Enqueued)
+		}
+		return map[string]any{"job": map[string]any{"id": id, "lease_token": token, "context": json.RawMessage(raw), "remaining_seconds": max(0, remaining), "queue_wait_ms": queueWait}}, nil
 	}
 	if status != "running" && status != "completed" && status != "failed" {
-		return nil, errors.New("invalid chat status")
+		return nil, desktopPeerFailure{"CHAT_INVALID_STATUS", 400}
 	}
 	var payload struct {
 		Content string `json:"content"`
@@ -361,28 +422,31 @@ func desktopChatPeer(db *sql.DB, operation, node, workspace, id, token, status s
 		Model   string `json:"model"`
 		Effort  string `json:"reasoning_effort"`
 		Error   string `json:"error_code"`
-	Stage   string `json:"stage"`
+		Stage   string `json:"stage"`
 	}
 	if json.Unmarshal(result, &payload) != nil || len(payload.Content) > 128<<10 || (status == "completed" && (strings.TrimSpace(payload.Content) == "" || payload.Thread == "")) {
-		return nil, errors.New("invalid chat result")
+		return nil, desktopPeerFailure{"CHAT_INVALID_RESULT", 400}
 	}
 	var body string
-	if db.QueryRow("SELECT body FROM desktop_chat_jobs WHERE id=? AND node_id=? AND workspace_id=?", id, node, workspace).Scan(&body) != nil {
-		return nil, errors.New("chat not found")
+	if err := db.QueryRow("SELECT body FROM desktop_chat_jobs WHERE id=? AND node_id=? AND workspace_id=?", id, node, workspace).Scan(&body); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, desktopPeerFailure{"CHAT_NOT_FOUND", 404}
+		}
+		return nil, err
 	}
 	var frozen struct {
 		Model  string `json:"model"`
 		Effort string `json:"reasoning_effort"`
 	}
 	if json.Unmarshal([]byte(body), &frozen) != nil {
-		return nil, errors.New("chat config invalid")
+		return nil, desktopPeerFailure{"CHAT_CONFIG_INVALID", 400}
 	}
 	if status != "failed" && (payload.Model != frozen.Model || payload.Effort != frozen.Effort) {
-		return nil, errors.New("chat model mismatch")
+		return nil, desktopPeerFailure{"CHAT_MODEL_MISMATCH", 409}
 	}
 	if payload.Thread != "" {
 		if matched, _ := regexp.MatchString(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`, payload.Thread); !matched {
-			return nil, errors.New("invalid chat thread")
+			return nil, desktopPeerFailure{"CHAT_INVALID_THREAD", 400}
 		}
 	}
 	tx, err := db.Begin()
@@ -408,7 +472,17 @@ func desktopChatPeer(db *sql.DB, operation, node, workspace, id, token, status s
 			storedToken == token && storedStatus == status && (status == "completed" || status == "failed") && sameDesktopChatResult(storedResult, result) {
 			return map[string]any{"status": "stored", "duplicate": true}, nil
 		}
-		return nil, errors.New("chat lease inactive or cancelled")
+		var actualStatus, actualToken string
+		if err := tx.QueryRow("SELECT status,lease_token FROM desktop_chat_jobs WHERE id=? AND node_id=? AND workspace_id=?", id, node, workspace).Scan(&actualStatus, &actualToken); err != nil {
+			return nil, err
+		}
+		if actualToken != token {
+			return nil, desktopPeerFailure{"CHAT_LEASE_REPLACED", 409}
+		}
+		if actualStatus == "cancelled" || actualStatus == "expired" {
+			return nil, desktopPeerFailure{"CHAT_CANCELLED", 409}
+		}
+		return nil, desktopPeerFailure{"CHAT_LEASE_INACTIVE", 409}
 	}
 	if payload.Thread != "" {
 		_, err = tx.Exec("UPDATE desktop_chat_sessions SET thread_id=? WHERE id=(SELECT session_id FROM desktop_chat_jobs WHERE id=?)", payload.Thread, id)

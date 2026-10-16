@@ -27,6 +27,7 @@ type ResearchService struct {
 	wg                  sync.WaitGroup
 	closed              bool
 	initializationError error
+	observers           map[string]map[chan struct{}]struct{}
 }
 
 func NewResearchService(store *ResearchStore, run ResearchRunner) *ResearchService {
@@ -95,7 +96,11 @@ func (s *ResearchService) execute(ctx context.Context, key string, job ResearchJ
 		if snapshot != nil {
 			job.Snapshot = snapshot
 		}
-		return s.store.Save(ctx, job)
+		err := s.store.Save(ctx, job)
+		if err == nil {
+			s.notify(job.ID)
+		}
+		return err
 	}
 	var analysis Analysis
 	var snapshot *ResearchSnapshot
@@ -162,6 +167,42 @@ func (s *ResearchService) execute(ctx context.Context, key string, job ResearchJ
 		s.mu.Lock()
 		s.initializationError = fmt.Errorf("保存研究结果失败：%w", saveErr)
 		s.mu.Unlock()
+	}
+	s.notify(job.ID)
+}
+
+// Subscribe before reading persisted state to avoid missed terminal notifications.
+func (s *ResearchService) Subscribe(id string) (<-chan struct{}, func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.observers == nil {
+		s.observers = make(map[string]map[chan struct{}]struct{})
+	}
+	if s.observers[id] == nil {
+		s.observers[id] = make(map[chan struct{}]struct{})
+	}
+	ch := make(chan struct{}, 1)
+	s.observers[id][ch] = struct{}{}
+	var once sync.Once
+	return ch, func() {
+		once.Do(func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			delete(s.observers[id], ch)
+			if len(s.observers[id]) == 0 {
+				delete(s.observers, id)
+			}
+		})
+	}
+}
+func (s *ResearchService) notify(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for ch := range s.observers[id] {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
 	}
 }
 

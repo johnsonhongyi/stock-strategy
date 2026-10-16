@@ -1,27 +1,30 @@
 import {requestJSON,type BackendConfig} from './backend';
 import type {HermesStreamRequest,HermesStreamResult} from './hermes';
 import {bridgeTargetLabel} from './linkage-display';
+import {streamTaskSnapshots} from './task-events';
 
 export type ChatRuntimeConfig={provider:'hermes'|'codex_desktop';node_id:string;workspace_id:string;model:string;reasoning_effort:string};
+export type DesktopChatCapability='ai_chat_v1'|'stock_research_v1';
 export type ChatRuntime={config:ChatRuntimeConfig;online:boolean;models:Array<{id:string;name:string;efforts:string[]}>;message:string};
 export type AvailableDesktopChatTarget={node_id:string;workspace_id:string;label:string;runtime:ChatRuntime};
-export async function loadChatRuntime(config:BackendConfig,node_id='',workspace_id=''){
- const query=node_id?'?'+new URLSearchParams({node_id,workspace_id}):'';
- return (await requestChatJSON<{data:ChatRuntime}>(config,'/api/v1/ai/runtime'+query)).data;
+export async function loadChatRuntime(config:BackendConfig,node_id='',workspace_id='',capability:DesktopChatCapability='ai_chat_v1'){
+ const params=new URLSearchParams();if(node_id){params.set('node_id',node_id);params.set('workspace_id',workspace_id);}if(capability!=='ai_chat_v1')params.set('capability',capability);
+ const query=params.toString();
+ return (await requestChatJSON<{data:ChatRuntime}>(config,'/api/v1/ai/runtime'+(query?'?'+query:''))).data;
 }
-export async function loadAvailableDesktopChatTargets(config:BackendConfig){
- const result=await requestChatJSON<{targets:Array<{node_id:string;workspace_id:string;label:string}>;default_node_id?:string}>(config,'/api/v1/linkage/targets');
+export async function loadAvailableDesktopChatTargets(config:BackendConfig,capability:DesktopChatCapability='ai_chat_v1'){
+ const result=await requestChatJSON<{targets:Array<{node_id:string;workspace_id:string;label:string}>;default_node_id?:string;strategy_target?:{node_id:string;workspace_id:string}}>(config,'/api/v1/linkage/targets');
  const preferredWorkspaceID=result.targets.find(target=>target.node_id===result.default_node_id)?.workspace_id||'';
  const probed=await Promise.all(result.targets.map(async target=>{
   try{
-   const runtime=await loadChatRuntime(config,target.node_id,target.workspace_id);
+   const runtime=await loadChatRuntime(config,target.node_id,target.workspace_id,capability);
    const usable=runtime.online&&runtime.models.some(model=>model.id&&model.efforts.length>0);
    return {target,runtime,usable};
   }catch{return {target,runtime:null,usable:false};}
  }));
  const ready=probed.flatMap(entry=>entry.usable&&entry.runtime?[{...entry.target,runtime:entry.runtime}]:[]);
  const targets=[...ready].sort((a,b)=>Number(b.workspace_id===preferredWorkspaceID)-Number(a.workspace_id===preferredWorkspaceID));
- return {targets,preferredWorkspaceID,otherAvailableCount:0};
+ return {targets,preferredWorkspaceID,strategyTarget:result.strategy_target||null,otherAvailableCount:0};
 }
 export async function prepareDesktopChatRuntime(config: BackendConfig, current: ChatRuntimeConfig): Promise<ChatRuntimeConfig> {
  const available=await loadAvailableDesktopChatTargets(config);
@@ -41,7 +44,8 @@ export async function prepareDesktopChatRuntime(config: BackendConfig, current: 
 export async function saveChatRuntime(config:BackendConfig,value:ChatRuntimeConfig){
  return (await requestChatJSON<{data:ChatRuntime}>(config,'/api/v1/ai/runtime',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)})).data;
 }
-type ChatJob={id:string;session_id:string;status:string;result?:{content?:string;thread_id?:string;error_code?:string;model?:string;reasoning_effort?:string;stage?:string;elapsed_seconds?:number}};
+type ChatJob={id:string;session_id:string;status:string;stream_events?:boolean;result?:{content?:string;thread_id?:string;error_code?:string;model?:string;reasoning_effort?:string;stage?:string;elapsed_seconds?:number}};
+const bridgeStages:Record<string,string>={app_server_start:'正在启动本机 Codex 引擎…',project_setup:'正在准备 Codex 工作区…',thread_resume:'正在恢复 Codex 会话…',thread_start:'正在创建 Codex 会话…',thread_label:'正在标记检测会话…',turn_start:'Codex 已就绪，正在提交检测请求…',codex_reply:'Codex 正在生成检测回执…',result_cache:'Codex 已回复，正在保存本机回执…',result_writeback:'本机已保存回执，正在写回 Web 后端…'};
 export async function testDesktopChatBridge(config:BackendConfig,target:AvailableDesktopChatTarget,modelID:string,effort:string,onStatus:(message:string)=>void){
  let job:ChatJob|undefined;
  const startedAt=Date.now();let lastStatus='';
@@ -56,8 +60,14 @@ export async function testDesktopChatBridge(config:BackendConfig,target:Availabl
   job=(await requestChatJSON<{data:ChatJob}>(config,'/api/v1/ai/desktop/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bridge_test:true,node_id:target.node_id,workspace_id:target.workspace_id,model:model.id,reasoning_effort:effort})})).data;
   onStatus('Web 后端已接收检测任务，等待该桥领取…');
   const deadline=Date.now()+180000,queuedDeadline=Date.now()+90000;
+  if(job.stream_events){
+   const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),Math.max(1,deadline-Date.now()));
+   try{await streamTaskSnapshots<ChatJob>(config,'/api/v1/ai/desktop/jobs/'+job.id+'/events',value=>{job=value;onStatus(value.status==='queued'?'等待桌面桥领取检测任务…':(bridgeStages[value.result?.stage||'']||'桌面桥正在处理检测任务…'));return ['completed','failed','expired','cancelled'].includes(value.status);},controller.signal);}
+   catch(error){if(typeof error==='object'&&error!==null&&'status'in error&&Number((error as {status:unknown}).status)<500)throw error;}
+   finally{clearTimeout(timer);}
+  }
   while(Date.now()<deadline){
-   job=(await requestChatJSON<{data:ChatJob}>(config,'/api/v1/ai/desktop/jobs/'+job.id)).data;
+   if(!['completed','failed','expired','cancelled'].includes(job.status))job=(await requestChatJSON<{data:ChatJob}>(config,'/api/v1/ai/desktop/jobs/'+job.id)).data;
    if(job.status==='completed'){
     const content=job.result?.content||'';
     if(!content.trim())throw new Error('桥已回传空内容，检测未通过。');
@@ -70,7 +80,7 @@ export async function testDesktopChatBridge(config:BackendConfig,target:Availabl
     onStatus('后端已排队，桌面桥尚未领取任务…');
     if(Date.now()>=queuedDeadline)throw new Error('Web已提交，但桌面桥90秒内未领取；请核对桥进程与后台任务状态。');
    }else if(job.status==='running'){
-    const stages:Record<string,string>={app_server_start:'正在启动本机 Codex 引擎…',project_setup:'正在准备 Codex 工作区…',thread_resume:'正在恢复 Codex 会话…',thread_start:'正在创建 Codex 会话…',thread_label:'正在标记检测会话…',turn_start:'Codex 已就绪，正在提交检测请求…',codex_reply:'Codex 正在生成检测回执…',result_cache:'Codex 已回复，正在保存本机回执…',result_writeback:'本机已保存回执，正在写回 Web 后端…'};
+    const stages=bridgeStages;
     const stage=job.result?.stage||'bridge_claimed';
     const message=(stages[stage]||'桌面桥已领取，正在处理检测任务…')+'（已等待 '+Math.floor((Date.now()-startedAt)/1000)+' 秒）';
     if(message!==lastStatus){lastStatus=message;onStatus(message);}
@@ -97,6 +107,23 @@ export async function streamDesktopChat(request:HermesStreamRequest):Promise<Her
  try{
   job=(await requestChatJSON<{data:ChatJob}>(request.config,'/api/v1/ai/desktop/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:request.prompt,session_id:request.hermesSessionID||'',analysis_id:request.analysisID||'',messages:request.seedMessages||[]})},request.signal)).data;
   request.onSession?.(job.session_id);const deadline=Date.now()+420000,queuedDeadline=Date.now()+90000;
+  if(request.signal?.aborted)throw new DOMException('AI对话已停止','AbortError');
+  if((job as ChatJob&{stream_events?:boolean}).stream_events){
+   const streamController=new AbortController();const abortStream=()=>streamController.abort();
+   request.signal?.addEventListener('abort',abortStream,{once:true});
+   const streamTimer=setTimeout(abortStream,Math.max(1,deadline-Date.now()));
+   const queueTimer=setTimeout(()=>{if(job?.status==='queued')abortStream();},Math.max(1,queuedDeadline-Date.now()));
+   try{
+    await streamTaskSnapshots<ChatJob>(request.config,'/api/v1/ai/desktop/jobs/'+job.id+'/events',value=>{
+     job=value;const content=value.result?.content||'';
+     if(content!==previous){previous=content;request.onDelta?.(content);}
+     request.onStatus?.({kind:'process',text:value.status==='queued'?'等待工作节点领取桌面 Codex 任务…':'桌面 Codex 正在回复…'});
+     return ['completed','failed','expired','cancelled'].includes(value.status);
+    },streamController.signal);
+   }catch(error){if(request.signal?.aborted)throw error;if(typeof error==='object'&&error!==null&&'status'in error&&Number((error as {status:unknown}).status)<500)throw error;}
+   finally{clearTimeout(streamTimer);clearTimeout(queueTimer);request.signal?.removeEventListener('abort',abortStream);}
+   if(job.status==='completed'&&job.result?.content?.trim())return {content:job.result.content,hermesSessionID:job.session_id};
+  }
   while(Date.now()<deadline){
    if(request.signal?.aborted)throw new DOMException('AI对话已停止','AbortError');
    job=(await requestChatJSON<{data:ChatJob}>(request.config,'/api/v1/ai/desktop/jobs/'+job.id,{},request.signal)).data;

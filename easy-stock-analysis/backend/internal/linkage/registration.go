@@ -241,7 +241,7 @@ func peerRouteAllowed(method, requestURI string, body []byte, workspaceID, nodeI
 		return parsed.Query().Get("workspace_id") == workspaceID && parsed.Query().Get("node_id") == nodeID
 	case method == http.MethodPost && (parsed.Path == "/api/v1/linkage/context/evidence" ||
 		parsed.Path == "/api/v1/linkage/attention/intents" || parsed.Path == "/api/v1/linkage/attention/intents/batch" ||
-		parsed.Path == "/api/v1/linkage/strategy/claim" || parsed.Path == "/api/v1/linkage/strategy/result" || parsed.Path == "/api/v1/linkage/strategy/heartbeat" || parsed.Path == "/api/v1/linkage/strategy/chat_claim" || parsed.Path == "/api/v1/linkage/strategy/chat_result"):
+		parsed.Path == "/api/v1/linkage/strategy/claim" || parsed.Path == "/api/v1/linkage/strategy/result" || parsed.Path == "/api/v1/linkage/strategy/heartbeat" || parsed.Path == "/api/v1/linkage/strategy/chat_claim" || parsed.Path == "/api/v1/linkage/strategy/chat_result" || parsed.Path == "/api/v1/linkage/strategy/next" || parsed.Path == "/api/v1/linkage/strategy/lease"):
 		var identity struct {
 			WorkspaceID string `json:"workspace_id"`
 			NodeID      string `json:"node_id"`

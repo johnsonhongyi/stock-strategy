@@ -34,8 +34,7 @@ func (s *Server) linkageTargets(w http.ResponseWriter, r *http.Request) {
 		target["chat_running"] = "0"
 		target["chat_jobs_status"] = "status_unavailable"
 	}
-	if db, err := s.chatDB(); err == nil {
-		defer db.Close()
+	if db, err := s.desktopDB(); err == nil {
 		chat := loadDesktopChatConfig(db)
 		response["chat_target"] = map[string]string{
 			"provider": chat.Provider, "node_id": chat.Node, "workspace_id": chat.Workspace,

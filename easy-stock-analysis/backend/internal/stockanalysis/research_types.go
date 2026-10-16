@@ -10,14 +10,16 @@ import (
 const ResearchPromptVersion = "stock-research-v2"
 
 type ResearchRequest struct {
-	Symbol          string        `json:"symbol"`
-	Purpose         string        `json:"purpose"`
-	Horizon         string        `json:"horizon"`
-	CostPrice       *float64      `json:"cost_price,omitempty"`
-	AnalysisLevel   ResearchLevel `json:"analysis_level,omitempty"`
-	AIProvider      string        `json:"ai_provider,omitempty"`
-	Model           string        `json:"model,omitempty"`
-	ReasoningEffort string        `json:"reasoning_effort,omitempty"`
+	Symbol             string        `json:"symbol"`
+	Purpose            string        `json:"purpose"`
+	Horizon            string        `json:"horizon"`
+	CostPrice          *float64      `json:"cost_price,omitempty"`
+	AnalysisLevel      ResearchLevel `json:"analysis_level,omitempty"`
+	AIProvider         string        `json:"ai_provider,omitempty"`
+	Model              string        `json:"model,omitempty"`
+	ReasoningEffort    string        `json:"reasoning_effort,omitempty"`
+	DesktopNodeID      string        `json:"desktop_node_id,omitempty"`
+	DesktopWorkspaceID string        `json:"desktop_workspace_id,omitempty"`
 }
 
 // Source text is evidence, not an instruction or a verified interpretation.
