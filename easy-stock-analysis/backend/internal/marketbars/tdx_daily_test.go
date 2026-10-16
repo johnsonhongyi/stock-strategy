@@ -29,6 +29,41 @@ func TestReadDailyPrefersSharedTDXFile(t *testing.T) {
     }
 }
 
+func TestReadDailyLoadsBenchmarkIndexesFromSharedTDXFiles(t *testing.T) {
+	dir := t.TempDir()
+	yesterday := time.Now().In(shanghai).AddDate(0, 0, -1).Format("2006-01-02")
+	prior := time.Now().In(shanghai).AddDate(0, 0, -2).Format("2006-01-02")
+	content := prior + ",2770,2800,2750,2780,16000000000,410000000000\n" +
+		yesterday + ",2780,2820,2760,2805,17000000000,420000000000\n"
+	for _, filename := range []string{"SZ399001.TXT", "SZ399006.TXT", "SH000001.TXT"} {
+		if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	store.SetTDXDailyDirectory(dir)
+	for _, sample := range []struct{ symbol, code string }{
+		{"399001.SZ", "399001"},
+		{"399006.SZ", "399006"},
+		{"000001.SH", "000001"},
+	} {
+		lines, found, err := store.ReadDaily(context.Background(), sample.symbol, "CN", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found || len(lines) != 2 {
+			t.Fatalf("%s: found=%v lines=%d", sample.symbol, found, len(lines))
+		}
+		if lines[1].Symbol != sample.code || lines[1].Meta.Source != "instock-tdx-daily" ||
+			lines[1].Meta.TradeDate != yesterday || lines[1].PreviousClose != 2780 {
+			t.Fatalf("%s: unexpected benchmark bars: %+v", sample.symbol, lines[1])
+		}
+	}
+}
 func TestReadDailyDoesNotFallBackToSQLiteWhenTDXIsEnabled(t *testing.T) {
     store, err := Open(":memory:")
     if err != nil { t.Fatal(err) }
