@@ -174,16 +174,20 @@ func (p *stockResearchCodexPrompter) PromptWithOptions(ctx context.Context, prom
 		switch status {
 		case "completed":
 			var result struct {
-				Content string `json:"content"`
-				Thread  string `json:"thread_id"`
-				Model   string `json:"model"`
-				Effort  string `json:"reasoning_effort"`
+				Content string           `json:"content"`
+				Thread  string           `json:"thread_id"`
+				Model   string           `json:"model"`
+				Effort  string           `json:"reasoning_effort"`
+				Timings map[string]int64 `json:"timings"`
+				Tokens  map[string]int64 `json:"token_usage"`
 			}
 			if json.Unmarshal([]byte(raw), &result) != nil || strings.TrimSpace(result.Content) == "" || result.Model != p.model || result.Effort != p.effort {
 				return hermes.PromptResult{}, errors.New("Codex Desktop 研究结果与所选模型不一致")
 			}
 			p.thread = result.Thread
-			return hermes.PromptResult{Content: result.Content, SessionID: p.session, StoredSessionID: p.session}, nil
+			return hermes.PromptResult{Content: result.Content, SessionID: p.session, StoredSessionID: p.session,
+				BridgeDiagnostics: &hermes.BridgeDiagnostics{Timings: researchBridgeMetrics(result.Timings, "queue_wait_ms", "engine_ready_ms", "thread_ready_ms", "turn_started_ms", "first_token_ms", "bridge_to_completed_ms"),
+					Tokens: researchBridgeMetrics(result.Tokens, "inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens")}}, nil
 		case "failed":
 			var result struct {
 				ErrorCode string `json:"error_code"`
@@ -202,6 +206,19 @@ func (p *stockResearchCodexPrompter) PromptWithOptions(ctx context.Context, prom
 		case <-ticker.C:
 		}
 	}
+}
+
+func researchBridgeMetrics(values map[string]int64, keys ...string) map[string]int64 {
+	clean := map[string]int64{}
+	for _, key := range keys {
+		if value, ok := values[key]; ok && value >= 0 && value <= 86_400_000 {
+			clean[key] = value
+		}
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+	return clean
 }
 
 func (p *stockResearchCodexPrompter) Close() {

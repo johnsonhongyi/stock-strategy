@@ -109,15 +109,17 @@ type ContextEvidence struct {
 }
 
 type Service struct {
-	db            *sql.DB
-	targetMu      sync.RWMutex
-	targetWriteMu sync.Mutex
-	targets       map[string]Target
-	client        *http.Client
-	wake          chan struct{}
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
+	db             *sql.DB
+	targetMu       sync.RWMutex
+	targetWriteMu  sync.Mutex
+	targets        map[string]Target
+	client         *http.Client
+	wake           chan struct{}
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	nonceCleanupMu sync.Mutex
+	nonceCleanupAt time.Time
 }
 
 func NewService(databasePath, targetsPath string) (*Service, error) {
@@ -265,7 +267,8 @@ func NewService(databasePath, targetsPath string) (*Service, error) {
 		CREATE TABLE IF NOT EXISTS linkage_auth_nonces (
 			nonce_key TEXT PRIMARY KEY,
 			timestamp INTEGER NOT NULL
-		);`); err != nil {
+		);
+		CREATE INDEX IF NOT EXISTS linkage_auth_nonce_time ON linkage_auth_nonces(timestamp);`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("initialize linkage database: %w", err)
 	}

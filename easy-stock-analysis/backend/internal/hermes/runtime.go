@@ -47,10 +47,16 @@ type Status struct {
 }
 
 type PromptResult struct {
-	Content         string
-	SessionID       string
-	StoredSessionID string
-	Usage           TokenUsage
+	Content           string
+	SessionID         string
+	StoredSessionID   string
+	Usage             TokenUsage
+	BridgeDiagnostics *BridgeDiagnostics
+}
+
+type BridgeDiagnostics struct {
+	Timings map[string]int64
+	Tokens  map[string]int64
 }
 
 type Process interface {

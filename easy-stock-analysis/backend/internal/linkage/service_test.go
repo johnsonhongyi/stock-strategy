@@ -167,6 +167,27 @@ func TestAuthenticatePeerRequestRejectsReplayAndCrossNodeRoutes(t *testing.T) {
 	if service.AuthenticatePeerRequest(http.MethodGet, requestURI, headers, nil) {
 		t.Fatal("replayed peer request was accepted")
 	}
+	// Cleanup is throttled, but replay protection remains durable.
+	if _, err := service.db.Exec("INSERT INTO linkage_auth_nonces(nonce_key,timestamp) VALUES(?,?)", "old", time.Now().Unix()-1000); err != nil {
+		t.Fatal(err)
+	}
+	if !service.pruneAuthNonces(time.Now()) {
+		t.Fatal("maintenance failed")
+	}
+	var count int
+	if err := service.db.QueryRow("SELECT COUNT(*) FROM linkage_auth_nonces WHERE nonce_key='old'").Scan(&count); err != nil || count != 1 {
+		t.Fatal("cleanup was not throttled", err, count)
+	}
+	if !service.pruneAuthNonces(time.Now().Add(61 * time.Second)) {
+		t.Fatal("scheduled cleanup failed")
+	}
+	if err := service.db.QueryRow("SELECT COUNT(*) FROM linkage_auth_nonces WHERE nonce_key='old'").Scan(&count); err != nil || count != 0 {
+		t.Fatal("expired nonce retained", err, count)
+	}
+	if service.AuthenticatePeerRequest(http.MethodGet, requestURI, headers, nil) {
+		t.Fatal("cleanup removed active replay guard")
+	}
+
 	if service.AuthenticatePeerRequest(http.MethodPost, "/api/v1/linkage/commands", headers, nil) {
 		t.Fatal("peer HMAC was allowed to submit commands")
 	}

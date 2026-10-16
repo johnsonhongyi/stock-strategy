@@ -79,3 +79,8 @@
 .stock-research-quantitative>summary { padding:14px 16px; cursor:pointer; font-weight:600; color:var(--theme-muted, #586560); background:var(--theme-surface-soft, #f4f6f5); }
 @media(max-width:900px) { .stock-research-history>div {grid-template-columns:repeat(2,minmax(0,1fr));} .stock-research-scenarios {grid-template-columns:1fr;} }
 @media(max-width:600px) { .stock-research-options {gap:8px;} .stock-research-options button {padding:6px 9px;} .stock-research-arguments,.stock-research-positions {grid-template-columns:1fr;gap:16px;} .stock-research-report h3 {font-size:var(--ui-font-18, 18px);} .stock-research-condition {grid-template-columns:56px minmax(0,1fr);gap:8px;} .stock-research-condition em {grid-column:2;text-align:left;} .stock-research-prices {grid-template-columns:1fr;gap:12px;} .stock-research-evidence summary {flex-wrap:wrap;} .stock-research-evidence summary strong {flex-basis:80%;} }
+
+.stock-research-timing { margin:8px 0; padding:9px 12px; border:1px solid var(--theme-line, #c9d5cd); border-radius:4px; color:var(--theme-text, #285d43); font-size:var(--ui-font-12, 12px); overflow-wrap:anywhere; }
+.stock-research-timing summary { cursor:pointer; font-weight:600; }
+.stock-research-timing p { margin:6px 0; line-height:1.6; }
+.stock-research-timing > div { margin-top:9px; }

@@ -678,11 +678,13 @@ func isInvalidModelJSON(err error) bool {
 }
 
 type promptJSONAttempt struct {
-	number        int
-	durationMS    int64
-	promptBytes   int
-	responseBytes int
-	err           string
+	bridgeTimings    map[string]int64
+	diagnosticTokens map[string]int64
+	number           int
+	durationMS       int64
+	promptBytes      int
+	responseBytes    int
+	err              string
 }
 
 func promptJSONObject[T any](ctx context.Context, prompter hermes.Prompter, prompt, label string) (T, error) {
@@ -704,6 +706,10 @@ func promptJSONObjectWithOptions[T any](ctx context.Context, prompter hermes.Pro
 		diagnostic := promptJSONAttempt{
 			number: attempt, durationMS: time.Since(startedAt).Milliseconds(), promptBytes: len([]byte(attemptPrompt)),
 			responseBytes: len([]byte(result.Content)),
+		}
+		if result.BridgeDiagnostics != nil {
+			diagnostic.bridgeTimings = result.BridgeDiagnostics.Timings
+			diagnostic.diagnosticTokens = result.BridgeDiagnostics.Tokens
 		}
 		if callErr != nil {
 			diagnostic.err = callErr.Error()

@@ -358,6 +358,14 @@ func (s *Server) desktopChatJob(w http.ResponseWriter, r *http.Request) {
 func desktopChatPeer(db *sql.DB, operation, node, workspace, id, token, status string, result json.RawMessage) (map[string]any, error) {
 	now := time.Now().Unix()
 	if operation == "chat_claim" {
+		// Idle long polls must not acquire SQLite's writer lock each second.
+		var candidate bool
+		if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM desktop_chat_jobs WHERE node_id=? AND workspace_id=? AND (status='queued' OR (status='running' AND expires_at>? AND lease_until<?)))", node, workspace, now, now).Scan(&candidate); err != nil {
+			return nil, err
+		}
+		if !candidate {
+			return map[string]any{"job": nil}, nil
+		}
 		tx, err := db.Begin()
 		if err != nil {
 			return nil, err
@@ -369,6 +377,9 @@ func desktopChatPeer(db *sql.DB, operation, node, workspace, id, token, status s
 		var raw string
 		err = tx.QueryRow("SELECT id,body FROM desktop_chat_jobs WHERE node_id=? AND workspace_id=? AND expires_at>? AND (status='queued' OR (status='running' AND lease_until<?)) ORDER BY created_at LIMIT 1", node, workspace, now, now).Scan(&id, &raw)
 		if errors.Is(err, sql.ErrNoRows) {
+			if err := tx.Commit(); err != nil {
+				return nil, err
+			}
 			return map[string]any{"job": nil}, nil
 		}
 		if err != nil {

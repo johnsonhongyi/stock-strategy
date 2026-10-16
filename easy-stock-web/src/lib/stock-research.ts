@@ -16,7 +16,7 @@ export type ResearchReport = {
 	analysis_level?: ResearchAnalysisLevel;
 	anchors: Array<{ id: string; label: string; price: number; source_id: string; as_of: string }>;
 	questions: Array<{ question: string; why: string; tool: string; query: string; source_id?: string; status: string; outcome?: string }>;
-	attempts: Array<{ stage: string; duration_ms: number; prompt_bytes: number; response_bytes: number; error?: string }>;
+	attempts: Array<{ stage: string; duration_ms: number; prompt_bytes: number; response_bytes: number; error?: string; bridge_timings?: Record<string, number>; token_usage?: Record<string, number> }>;
 	compression?: { version: string; original_source_count: number; selected_source_count: number; original_content_bytes: number; selected_content_bytes: number };
 	validation: string; validation_notes: string[];
 };

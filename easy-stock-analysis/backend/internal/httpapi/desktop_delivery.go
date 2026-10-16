@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -234,14 +235,21 @@ func streamDesktopSnapshots(w http.ResponseWriter, r *http.Request, wake <-chan 
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("X-Accel-Buffering", "no")
 	controller := http.NewResponseController(w)
+	var previous []byte
 	send := func(value any) bool {
-		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		raw, err := json.Marshal(map[string]any{"data": value})
 		if err != nil {
 			return false
 		}
+		if bytes.Equal(previous, raw) {
+			return true
+		}
+		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		_, err = fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", raw)
 		flusher.Flush()
+		if err == nil {
+			previous = raw
+		}
 		return err == nil
 	}
 	if !send(data) || terminal {

@@ -208,3 +208,87 @@ func TestDesktopSSEStreamsCommittedTerminalAndChecksOwner(t *testing.T) {
 		t.Fatal("cross-owner SSE exposed")
 	}
 }
+
+func TestDesktopIdleChatClaimIsReadOnly(t *testing.T) {
+	s, _, _ := aiPeerFixture(t)
+	db, err := s.desktopDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec("PRAGMA query_only=ON"); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec("PRAGMA query_only=OFF")
+	result, err := desktopChatPeer(db, "chat_claim", "desk", "ws", "", "", "", nil)
+	if err != nil || result["job"] != nil {
+		t.Fatalf("idle claim: %v %v", result, err)
+	}
+}
+func TestDesktopStaleQueueExpiryCommitsWithoutClaim(t *testing.T) {
+	s, _, _ := aiPeerFixture(t)
+	db, err := s.desktopDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	_, err = db.Exec("INSERT INTO desktop_chat_jobs(id,session_id,owner,node_id,workspace_id,body,status,created_at,expires_at) VALUES('stale','session','local-desktop','desk','ws','{}','queued',?,?)", now-100, now+60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := desktopChatPeer(db, "chat_claim", "desk", "ws", "", "", "", nil)
+	if err != nil || result["job"] != nil {
+		t.Fatalf("stale claim: %v %v", result, err)
+	}
+	var status string
+	if err = db.QueryRow("SELECT status FROM desktop_chat_jobs WHERE id='stale'").Scan(&status); err != nil || status != "expired" {
+		t.Fatalf("expiry rolled back: %s %v", status, err)
+	}
+}
+func TestDesktopSnapshotsSkipDuplicatesAndKeepTerminal(t *testing.T) {
+	wake := make(chan struct{}, 1)
+	reads := make(chan int, 1)
+	done := make(chan struct{})
+	recorder := httptest.NewRecorder()
+	go func() {
+		defer close(done)
+		count := 0
+		streamDesktopSnapshots(recorder, httptest.NewRequest("GET", "/events", nil), wake, func() (any, bool, error) {
+			count++
+			terminal := count == 4
+			status := "running"
+			if terminal {
+				status = "completed"
+			}
+			reads <- count
+			return map[string]any{"status": status}, terminal, nil
+		})
+	}()
+	for i := 1; i <= 4; i++ {
+		select {
+		case <-reads:
+		case <-time.After(time.Second):
+			t.Fatal("stream did not read")
+		}
+		if i < 4 {
+			wake <- struct{}{}
+		}
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("terminal stream did not close")
+	}
+	body := recorder.Body.String()
+	if strings.Count(body, "event: snapshot") != 2 || !strings.Contains(body, "completed") {
+		t.Fatal(body)
+	}
+}
+func TestResearchBridgeMetricsExcludeUnknownOrInvalidFields(t *testing.T) {
+	result := researchBridgeMetrics(map[string]int64{"queue_wait_ms": 3, "secret": 7, "bad": -1, "huge": 86400001}, "queue_wait_ms", "bad", "huge")
+	if len(result) != 1 || result["queue_wait_ms"] != 3 {
+		t.Fatal(result)
+	}
+	if researchBridgeMetrics(nil, "queue_wait_ms") != nil {
+		t.Fatal("missing timings must remain unknown")
+	}
+}

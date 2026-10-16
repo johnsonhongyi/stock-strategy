@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import './stock-research.css';
 import { ArrowUpRight, CheckCircle2, CircleAlert, FileText, History, LoaderCircle, SearchCheck, Square, Trash2 } from 'lucide-react';
 import type { StockAIAnalysis } from '../lib/backend';
+import { researchTiming } from '../lib/research-timing';
 import { conditionStatusLabel, evidenceLevelLabel, isResearchRunning, researchConditionValue, researchLevelLabel, safeResearchURL, type ResearchClaim, type ResearchJob, type ResearchJobSummary, type ResearchReport, type ResearchRequest, type ResearchVerification } from '../lib/stock-research';
 
 export function StockResearchOptions({ purpose, horizon, cost, onPurpose, onHorizon, onCost }: { purpose: ResearchRequest['purpose']; horizon: ResearchRequest['horizon']; cost: string; onPurpose: (value: ResearchRequest['purpose']) => void; onHorizon: (value: ResearchRequest['horizon']) => void; onCost: (value: string) => void }) {
@@ -22,12 +23,26 @@ export function StockResearchProgress({ job, onCancel }: { job: ResearchJob | nu
 	}, [running, job?.id]);
 	if (!job) return null;
 	const elapsed = formatElapsedTime(job.started_at, running ? now : Date.parse(job.completed_at || job.updated_at));
-	return <div className={`stock-research-progress ${job.status}`} role="status">
+	return <><div className={`stock-research-progress ${job.status}`} role="status">
 		{running ? <LoaderCircle className="spin" size={17} /> : job.status === 'succeeded' ? <CheckCircle2 size={17} /> : <CircleAlert size={17} />}
 		<span className="stock-research-progress-message">{job.message}{job.error ? `：${job.error}` : ''}</span>
 		<strong className="stock-research-progress-elapsed">目前总耗时 {elapsed}</strong>
 		{running && <button type="button" onClick={onCancel} title="停止本次研究" aria-label="停止本次研究"><Square size={15} /></button>}
-	</div>;
+	</div>{!running && <ResearchTiming job={job} />}</>;
+}
+
+function ResearchTiming({ job }: { job: ResearchJob }) {
+	if (!job.analysis?.research_report?.attempts.length) return null;
+	const timing = researchTiming(job);
+	const seconds = (value: number | null) => value === null ? '未采集' : `${(value / 1000).toFixed(2)} 秒`;
+	const labels: Record<string, string> = { quick: '快速研判', outline: '问题梳理', core: '核心判断', trade: '条件整理', repair: '结构修复' };
+	return <details className="stock-research-timing"><summary>耗时分解 · AI调用 {seconds(timing.calls)} · 资料与校验 {seconds(timing.preparation)}</summary>
+		<p>服务端总耗时 {seconds(timing.total)}。AI调用包含排队、桥准备、Codex等待与输出、结果回传；不等于纯推理耗时。</p>
+		{timing.attempts.map((attempt, index) => <div key={index}><strong>{labels[attempt.stage] || attempt.stage} · {seconds(attempt.call)}</strong>
+			{attempt.setup !== null ? <p>排队 {seconds(attempt.queue)} · 桥准备 {seconds(attempt.setup)} · Codex等待首段 {seconds(attempt.waiting)} · 输出 {seconds(attempt.output)} · 其余调用链路 {seconds(attempt.other)}</p> : <p>历史记录未采集桥分段计时。</p>}
+			{attempt.tokens && <p>输入 {attempt.tokens.inputTokens ?? '未采集'} token · 缓存命中 {attempt.tokens.cachedInputTokens ?? '未采集'} · 推理 {attempt.tokens.reasoningOutputTokens ?? '未采集'}</p>}
+		</div>)}
+	</details>;
 }
 
 function formatElapsedTime(startedAt: string, endAt: number) {
@@ -71,7 +86,7 @@ export function StockResearchReportView({ analysis, view = 'research', verificat
 			{view !== 'risk' && report.scenarios.length > 0 && <section className="stock-research-band"><h4>条件情景</h4><div className="stock-research-scenarios">{report.scenarios.map((scenario) => <article key={scenario.key}><strong>{scenario.name}</strong><p>{scenario.description}</p><small>{scenario.condition_ids.map((id) => report.conditions.find((item) => item.id === id)?.text).filter(Boolean).join('；')}</small><p>{scenario.response}</p></article>)}</div></section>}
 			<section className="stock-research-band"><h4>信息缺口与限制</h4><ul>{report.limitations.map((item, i) => <li key={i}>{item}</li>)}</ul></section>
 		</>}
-		<footer className="stock-research-footer"><span>分析时点 {formatDate(report.cutoff_at)} · 快照 {report.snapshot_id.slice(0, 8)} · v{report.snapshot_version}</span><span>{report.attempts.length} 次模型调用 · {Math.round(report.attempts.reduce((sum, item) => sum + item.duration_ms, 0) / 1000)} 秒模型耗时 · {report.prompt_version}{report.compression ? ` · 证据${report.compression.original_content_bytes > report.compression.selected_content_bytes ? '已压缩' : '未压缩'}` : ''}</span></footer>
+		<footer className="stock-research-footer"><span>分析时点 {formatDate(report.cutoff_at)} · 快照 {report.snapshot_id.slice(0, 8)} · v{report.snapshot_version}</span><span>{report.attempts.length} 次模型调用 · {Math.round(report.attempts.reduce((sum, item) => sum + item.duration_ms, 0) / 1000)} 秒AI调用耗时（含桥接） · {report.prompt_version}{report.compression ? ` · 证据${report.compression.original_content_bytes > report.compression.selected_content_bytes ? '已压缩' : '未压缩'}` : ''}</span></footer>
 	</div>;
 }
 

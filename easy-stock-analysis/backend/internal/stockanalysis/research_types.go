@@ -161,11 +161,13 @@ type ResearchTradeConditions struct {
 }
 
 type ResearchAttempt struct {
-	Stage         string `json:"stage"`
-	DurationMS    int64  `json:"duration_ms"`
-	PromptBytes   int    `json:"prompt_bytes"`
-	ResponseBytes int    `json:"response_bytes"`
-	Error         string `json:"error,omitempty"`
+	BridgeTimings map[string]int64 `json:"bridge_timings,omitempty"`
+	TokenUsage    map[string]int64 `json:"token_usage,omitempty"`
+	Stage         string           `json:"stage"`
+	DurationMS    int64            `json:"duration_ms"`
+	PromptBytes   int              `json:"prompt_bytes"`
+	ResponseBytes int              `json:"response_bytes"`
+	Error         string           `json:"error,omitempty"`
 }
 
 type ResearchPromptCompression struct {

@@ -218,13 +218,29 @@ func (s *Service) AuthenticatePeerRequest(method, requestURI string, headers htt
 	if err != nil || !hmac.Equal(mac.Sum(nil), provided) {
 		return false
 	}
-	_, err = s.db.Exec(`DELETE FROM linkage_auth_nonces WHERE timestamp < ?`, time.Now().Unix()-600)
-	if err != nil {
+	if !s.pruneAuthNonces(time.Now()) {
 		return false
 	}
 	_, err = s.db.Exec(`INSERT INTO linkage_auth_nonces(nonce_key,timestamp) VALUES(?,?)`,
 		nodeID+":"+workspaceID+":"+nonce, timestampSeconds)
 	return err == nil
+}
+
+// Nonce insertion remains durable and unique for every authenticated request.
+// Cleanup is maintenance; the ten-minute retention exceeds the signature window.
+func (s *Service) pruneAuthNonces(now time.Time) bool {
+	if !s.nonceCleanupMu.TryLock() {
+		return true
+	}
+	defer s.nonceCleanupMu.Unlock()
+	if now.Sub(s.nonceCleanupAt) < time.Minute {
+		return true
+	}
+	if _, err := s.db.Exec(`DELETE FROM linkage_auth_nonces WHERE timestamp < ?`, now.Unix()-600); err != nil {
+		return false
+	}
+	s.nonceCleanupAt = now
+	return true
 }
 
 func peerRouteAllowed(method, requestURI string, body []byte, workspaceID, nodeID string) bool {

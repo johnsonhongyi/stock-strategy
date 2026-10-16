@@ -110,7 +110,7 @@ func RunResearch(ctx context.Context, prompter hermes.Prompter, snapshot *Resear
 	attempts := []ResearchAttempt{}
 	options := func(stage string) promptJSONObjectOptions {
 		return promptJSONObjectOptions{maxAttempts: 1, disableTools: true, onAttempt: func(a promptJSONAttempt) {
-			attempts = append(attempts, ResearchAttempt{Stage: stage, DurationMS: a.durationMS, PromptBytes: a.promptBytes, ResponseBytes: a.responseBytes, Error: a.err})
+			attempts = append(attempts, ResearchAttempt{Stage: stage, DurationMS: a.durationMS, PromptBytes: a.promptBytes, ResponseBytes: a.responseBytes, Error: a.err, BridgeTimings: a.bridgeTimings, TokenUsage: a.diagnosticTokens})
 		}}
 	}
 	outlinePack := buildResearchEvidencePack(*snapshot, request, researchPromptOutline, nil)
@@ -203,7 +203,7 @@ func runQuickResearch(ctx context.Context, prompter hermes.Prompter, snapshot *R
 	pack := buildResearchEvidencePack(*snapshot, request, researchPromptSynthesis, nil)
 	progress("synthesizing", "AI正在快速研判")
 	result, err := promptJSONObjectWithOptions[ResearchSynthesis](ctx, prompter, researchQuickPromptWithPack(*snapshot, request, pack), "快速研判", promptJSONObjectOptions{maxAttempts: 1, disableTools: true, onAttempt: func(a promptJSONAttempt) {
-		attempts = append(attempts, ResearchAttempt{Stage: "quick", DurationMS: a.durationMS, PromptBytes: a.promptBytes, ResponseBytes: a.responseBytes, Error: a.err})
+		attempts = append(attempts, ResearchAttempt{Stage: "quick", DurationMS: a.durationMS, PromptBytes: a.promptBytes, ResponseBytes: a.responseBytes, Error: a.err, BridgeTimings: a.bridgeTimings, TokenUsage: a.diagnosticTokens})
 	}})
 	if err != nil {
 		return err
@@ -230,7 +230,7 @@ func runStandardResearch(ctx context.Context, prompter hermes.Prompter, snapshot
 	repairUsed := false
 	options := func(stage string) promptJSONObjectOptions {
 		return promptJSONObjectOptions{maxAttempts: 1, disableTools: true, onAttempt: func(a promptJSONAttempt) {
-			attempts = append(attempts, ResearchAttempt{Stage: stage, DurationMS: a.durationMS, PromptBytes: a.promptBytes, ResponseBytes: a.responseBytes, Error: a.err})
+			attempts = append(attempts, ResearchAttempt{Stage: stage, DurationMS: a.durationMS, PromptBytes: a.promptBytes, ResponseBytes: a.responseBytes, Error: a.err, BridgeTimings: a.bridgeTimings, TokenUsage: a.diagnosticTokens})
 		}}
 	}
 	outline := ResearchOutline{}
