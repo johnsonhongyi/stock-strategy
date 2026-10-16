@@ -1,16 +1,16 @@
-.sbc-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; padding:7px 10px; font-size:12px; color:var(--text-secondary, #94a3b8); }
+.sbc-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; padding:7px 10px; font-size:var(--ui-font-12, 12px); color:var(--text-secondary, #94a3b8); }
 .sbc-toolbar strong { color:var(--text-primary, #e2e8f0); }
 .sbc-toolbar label { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
 .sbc-toolbar input { accent-color:#10b981; }
-.sbc-summary { padding:0 10px 8px; font-size:11px; line-height:1.6; color:var(--text-secondary, #94a3b8); overflow-wrap:anywhere; }
-.kline-explorer-toolbar,.kline-viewport-tools {display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:8px 10px;color:var(--muted);font-size:11px;}
+.sbc-summary { padding:0 10px 8px; font-size:var(--ui-font-11, 11px); line-height:1.6; color:var(--text-secondary, #94a3b8); overflow-wrap:anywhere; }
+.kline-explorer-toolbar,.kline-viewport-tools {display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:8px 10px;color:var(--muted);font-size:var(--ui-font-11, 11px);}
 .kline-explorer-toolbar {justify-content:space-between;}
 .kline-period-controls,.kline-window-actions {display:flex;gap:4px;flex-wrap:wrap;}
 .kline-explorer button {cursor:pointer;}
 .kline-explorer-toolbar button,.kline-viewport-tools button,.kline-window-launcher button {border:1px solid var(--line,#cbd5e1);border-radius:6px;padding:5px 8px;background:var(--theme-surface-soft,#f8fafc);color:var(--text,#334155);cursor:pointer;}
 .kline-explorer-toolbar button.active {background:var(--theme-blue-soft,#dbeafe);color:var(--blue,#2563eb);}
 .kline-window-actions {margin-left:auto;}
-.watchlist-linkage {display:grid;gap:7px;padding:9px 10px;border-top:1px solid var(--line,#cbd5e1);background:var(--theme-surface-soft,#f8fafc);color:var(--text,#334155);font-size:11px;}
+.watchlist-linkage {display:grid;gap:7px;padding:9px 10px;border-top:1px solid var(--line,#cbd5e1);background:var(--theme-surface-soft,#f8fafc);color:var(--text,#334155);font-size:var(--ui-font-11, 11px);}
 .watchlist-linkage-context,.watchlist-linkage-status {display:flex;flex-wrap:wrap;gap:4px 12px;color:var(--muted,#64748b);}
 .watchlist-linkage-context strong {color:var(--text,#334155);}
 .watchlist-linkage-controls {display:flex;align-items:center;justify-content:space-between;gap:8px;}
@@ -30,7 +30,7 @@
 .sbc-chart-window {resize:both;overflow:auto;min-width:min(360px,calc(100vw - 24px));min-height:min(360px,calc(100vh - 24px));max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);background:var(--theme-surface,#fff);color:var(--text,#172033);border:1px solid var(--line,#cbd5e1);border-radius:12px;box-shadow:0 16px 60px #0005;}
 .sbc-chart-window.maximized {width:calc(100vw - 24px);height:calc(100vh - 24px);resize:none;}
 .sbc-chart-window>header {display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line,#cbd5e1);}
-.sbc-chart-window>header span {font-size:11px;color:var(--muted);}
+.sbc-chart-window>header span {font-size:var(--ui-font-11, 11px);color:var(--muted);}
 .sbc-chart-window .kline-chart {min-width:0;width:100%;height:auto;}
 .sbc-chart-window .kline-chart-wrap {overflow:hidden;min-height:0;}
 .sbc-chart-window .sbc-toolbar {color:var(--text,#334155);}
@@ -39,7 +39,7 @@
 .kline-chart-wrap .kline-details { position: relative; top: auto; left: auto; right: auto; pointer-events: auto; margin: 8px 0; min-width: 0; width: 100%; box-sizing: border-box; grid-template-columns: repeat(2, minmax(0, 1fr) auto); }
 .kline-chart-wrap .kline-details.floating { position: absolute; margin: 0; width: min(300px, 100%); z-index: 5; }
 .kline-details > header { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 8px; }
-.kline-details header button { font-size: 11px; padding: 3px 6px; }
+.kline-details header button { font-size: var(--ui-font-11, 11px); padding: 3px 6px; }
 .kline-details-handle { cursor: move; touch-action: none; }
 .kline-details > strong { grid-column: 1 / -1; }
 @media (max-width: 480px) { .kline-chart-wrap .kline-details { grid-template-columns: minmax(0, 1fr) auto; } }

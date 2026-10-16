@@ -34,6 +34,23 @@ func NormalizeResearchRequest(request ResearchRequest) (ResearchRequest, error) 
 		return request, fmt.Errorf("analysis_level must be quantitative, quick, standard or deep")
 	}
 	request.AnalysisLevel = level
+	if request.AIProvider == "" {
+		request.AIProvider = "hermes"
+	}
+	switch request.AIProvider {
+	case "hermes":
+		if request.Model != "" || request.ReasoningEffort != "" {
+			return request, fmt.Errorf("model and reasoning_effort are only valid for codex_desktop")
+		}
+	case "codex_desktop":
+		request.Model = strings.TrimSpace(request.Model)
+		request.ReasoningEffort = strings.TrimSpace(request.ReasoningEffort)
+		if request.Model == "" || len(request.Model) > 128 || strings.ContainsAny(request.Model, "\r\n\x00") || request.ReasoningEffort == "" || len(request.ReasoningEffort) > 32 || strings.ContainsAny(request.ReasoningEffort, "\r\n\x00") {
+			return request, fmt.Errorf("codex_desktop requires a valid model and reasoning_effort")
+		}
+	default:
+		return request, fmt.Errorf("ai_provider must be hermes or codex_desktop")
+	}
 	if request.Purpose == "" {
 		request.Purpose = "observe"
 	}

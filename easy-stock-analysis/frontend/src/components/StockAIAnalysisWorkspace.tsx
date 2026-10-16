@@ -70,6 +70,7 @@ import {
 	signedPercent,
 } from '../lib/stock-analysis';
 import { useStockResearch } from '../lib/use-stock-research';
+import { loadChatRuntime, type ChatRuntime } from '../lib/desktop-chat';
 import { isResearchRunning, researchPlanText, type ResearchAnalysisLevel, type ResearchRequest } from '../lib/stock-research';
 import { StockResearchHistory, StockResearchOptions, StockResearchProgress, StockResearchReportView } from './StockResearchReport';
 
@@ -102,6 +103,7 @@ const historyStorageKey = 'easy-stock.stock-ai-history.v2';
 const capitalStorageKey = 'easy-stock.stock-ai-capital.v1';
 const directoryStorageKey = 'easy-stock.stock-directory.v1';
 const hotStockSidebarStorageKey = 'easy-stock.stock-ai-popular-sidebar-collapsed.v1';
+const stockAIModelPreferenceKey = 'easy-stock.stock-ai-model.v1';
 const directoryStorageTTL = 24 * 60 * 60 * 1000;
 const examples = ['600519', '300750', '002594', '601138', '688981'];
 
@@ -117,6 +119,17 @@ function writeStoredValue(key: string, value: string) { try { window.localStorag
 
 type DirectoryState = 'idle' | 'loading' | 'cached' | 'ready' | 'error';
 type HotRankState = 'idle' | 'loading' | 'ready' | 'error';
+type StockAIProvider = 'hermes' | 'codex_desktop';
+type StockAIModelPreference = { provider?: StockAIProvider; model?: string; reasoning_effort?: string };
+
+function readStockAIModelPreference(): StockAIModelPreference {
+	try {
+		return JSON.parse(window.localStorage.getItem(stockAIModelPreferenceKey) || '{}') as StockAIModelPreference;
+	} catch {
+		return {};
+	}
+}
+
 export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnalysis, onInitialAnalysisConsumed, onAskAI, onOpenSettings }: Props) {
 	const research = useStockResearch(config);
 	const [purpose, setPurpose] = useState<ResearchRequest['purpose']>('observe');
@@ -142,6 +155,11 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 	const [hotStockSidebarCollapsed, setHotStockSidebarCollapsed] = useState(() => readStoredValue(hotStockSidebarStorageKey) === '1');
 	const [llmProfiles, setLLMProfiles] = useState<LLMProfile[]>([]);
 	const [activeLLMProfileID, setActiveLLMProfileID] = useState('');
+	const [desktopRuntime, setDesktopRuntime] = useState<ChatRuntime | null>(null);
+	const [modelRuntimeReady, setModelRuntimeReady] = useState(false);
+	const [analysisProvider, setAnalysisProvider] = useState<StockAIProvider>('hermes');
+	const [codexModel, setCodexModel] = useState('');
+	const [codexEffort, setCodexEffort] = useState('');
 	const [aiChoiceBusy, setAIChoiceBusy] = useState(false);
 	const exportRef = useRef<HTMLDivElement>(null);
 	const analysisRequestSequence = useRef(0);
@@ -151,15 +169,56 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 	analysisRef.current = analysis;
 
 	useEffect(() => {
-		if (!config) return;
+		if (!config) { setModelRuntimeReady(true); return; }
 		let cancelled = false;
-		void requestJSON<{ data: AppSettings }>(config, '/api/v1/settings').then((settings) => {
+		setModelRuntimeReady(false);
+		const settingsRequest = requestJSON<{ data: AppSettings }>(config, '/api/v1/settings').then((settings) => settings.data).catch(() => null);
+		const runtimeRequest = loadChatRuntime(config).catch(() => null);
+		void Promise.all([settingsRequest, runtimeRequest]).then(([settings, runtime]) => {
 			if (cancelled) return;
-			setLLMProfiles(settings.data.llm_profiles || []);
-			setActiveLLMProfileID(settings.data.active_llm_profile_id || settings.data.llm_profiles?.[0]?.id || '');
-		}).catch(() => undefined);
+			const profiles = settings?.llm_profiles || [];
+			setLLMProfiles(profiles);
+			setActiveLLMProfileID(settings?.active_llm_profile_id || profiles[0]?.id || '');
+			setDesktopRuntime(runtime);
+			const preference = readStockAIModelPreference();
+			const codexReady = Boolean(runtime?.online && runtime.models.length > 0);
+			const defaultProvider: StockAIProvider = runtime?.config.provider === 'codex_desktop' && codexReady ? 'codex_desktop' : profiles.length === 0 && codexReady ? 'codex_desktop' : 'hermes';
+			const provider = preference.provider === 'codex_desktop' && codexReady ? 'codex_desktop' : preference.provider === 'hermes' ? 'hermes' : defaultProvider;
+			const configuredModel = runtime?.config.model || '';
+			const model = runtime?.models.find((item) => item.id === (preference.model || configuredModel)) || runtime?.models[0];
+			const effort = model?.efforts.includes(preference.reasoning_effort || runtime?.config.reasoning_effort || '')
+				? preference.reasoning_effort || runtime?.config.reasoning_effort || ''
+				: model?.efforts[0] || '';
+			setAnalysisProvider(provider);
+			setCodexModel(model?.id || '');
+			setCodexEffort(effort);
+			setModelRuntimeReady(true);
+		}).catch(() => {
+			if (!cancelled) {
+				setDesktopRuntime(null);
+				setModelRuntimeReady(true);
+			}
+		});
 		return () => { cancelled = true; };
 	}, [config, refreshKey]);
+
+	const changeAnalysisProvider = (provider: StockAIProvider) => {
+		setAnalysisProvider(provider);
+		writeStoredValue(stockAIModelPreferenceKey, JSON.stringify({ provider, model: codexModel, reasoning_effort: codexEffort }));
+	};
+
+	const changeCodexModel = (model: string) => {
+		const selected = desktopRuntime?.models.find((item) => item.id === model);
+		const effort = selected?.efforts.includes(codexEffort) ? codexEffort : selected?.efforts[0] || '';
+		setCodexModel(model);
+		setCodexEffort(effort);
+		writeStoredValue(stockAIModelPreferenceKey, JSON.stringify({ provider: analysisProvider, model, reasoning_effort: effort }));
+	};
+
+	const changeCodexEffort = (reasoning_effort: string) => {
+		setCodexEffort(reasoning_effort);
+		writeStoredValue(stockAIModelPreferenceKey, JSON.stringify({ provider: analysisProvider, model: codexModel, reasoning_effort }));
+	};
 
 	const switchResearchModel = async (profileID: string) => {
 		if (!config || !profileID || profileID === activeLLMProfileID || aiChoiceBusy) return;
@@ -218,6 +277,9 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 		if (!research.job) return;
 		setQuery(research.job.request.symbol); setPurpose(research.job.request.purpose); setHorizon(research.job.request.horizon); setCost(research.job.request.cost_price?.toString() || '');
 		if (research.job.request.analysis_level) setResearchLevel(research.job.request.analysis_level);
+		setAnalysisProvider(research.job.request.ai_provider || 'hermes');
+		if (research.job.request.model) setCodexModel(research.job.request.model);
+		if (research.job.request.reasoning_effort) setCodexEffort(research.job.request.reasoning_effort);
 	}, [research.job?.id]);
 
 	const runAnalysis = useCallback(async (rawSymbol: string, selectedLevel: ResearchAnalysisLevel = researchLevel) => {
@@ -236,6 +298,12 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 			setState('error');
 			return;
 		}
+		const codexSelection = desktopRuntime?.models.find((item) => item.id === codexModel);
+		if (analysisProvider === 'codex_desktop' && (!desktopRuntime?.online || !codexSelection || !codexSelection.efforts.includes(codexEffort))) {
+			setError('Codex Desktop 模型目录未就绪，或所选思考强度已不受支持');
+			setState('error');
+			return;
+		}
 		setState('loading');
 		setError('');
 		setRefinementNotice('');
@@ -244,13 +312,17 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 		writeStoredValue(symbolStorageKey, symbol);
 		try {
 			if (purpose === 'holding' && cost && (!(Number(cost) > 0) || !Number.isFinite(Number(cost)))) throw new Error('持仓成本须为正数');
-			await research.start({ symbol, purpose, horizon, analysis_level: selectedLevel, ...(purpose === 'holding' && cost ? { cost_price: Number(cost) } : {}) });
+			await research.start({
+				symbol, purpose, horizon, analysis_level: selectedLevel, ai_provider: analysisProvider,
+				...(analysisProvider === 'codex_desktop' ? { model: codexModel, reasoning_effort: codexEffort } : {}),
+				...(purpose === 'holding' && cost ? { cost_price: Number(cost) } : {}),
+			});
 		} catch (loadError) {
 			if (isAbortError(loadError) || analysisRequestSequence.current !== sequence) return;
 			setError(loadError instanceof Error ? loadError.message : '个股AI分析失败');
 			setState('error');
 		}
-	}, [config, directory, research.start, purpose, horizon, cost, researchLevel]);
+	}, [config, directory, research.start, purpose, horizon, cost, researchLevel, analysisProvider, desktopRuntime, codexModel, codexEffort]);
 
 	const requestAnalysis = useCallback((rawSymbol: string) => {
 		const symbol = resolveStockDirectorySymbol(rawSymbol, directory);
@@ -403,8 +475,8 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 
 	return (
 		<section className="stock-ai-workspace">
-			<AnalysisSearch query={query} mode={mode} directory={directory} directoryState={directoryState} onQuery={setQuery} onSubmit={submit} loading={state === 'loading' || state === 'refining'} llmProfiles={llmProfiles} activeLLMProfileID={activeLLMProfileID} config={config} refreshKey={String(refreshKey)} choiceBusy={aiChoiceBusy} onModelChange={(id) => void switchResearchModel(id)} />
-			{levelDialogOpen && <ResearchLevelDialog value={researchLevel} onChange={setResearchLevel} onCancel={() => setLevelDialogOpen(false)} onConfirm={confirmResearchLevel} />}
+			<AnalysisSearch query={query} mode={mode} directory={directory} directoryState={directoryState} onQuery={setQuery} onSubmit={submit} loading={state === 'loading' || state === 'refining' || !modelRuntimeReady} llmProfiles={llmProfiles} activeLLMProfileID={activeLLMProfileID} config={config} refreshKey={String(refreshKey)} choiceBusy={aiChoiceBusy} onModelChange={(id) => void switchResearchModel(id)} desktopRuntime={desktopRuntime} analysisProvider={analysisProvider} codexModel={codexModel} codexEffort={codexEffort} onProviderChange={changeAnalysisProvider} onCodexModelChange={changeCodexModel} onCodexEffortChange={changeCodexEffort} />
+			{levelDialogOpen && <ResearchLevelDialog value={researchLevel} runtimeLabel={analysisProvider === 'codex_desktop' ? `Codex Desktop · ${codexModel || '未选择模型'} / ${codexEffort || '思考等级不可用'}` : 'Hermes · 使用当前模型配置'} onChange={setResearchLevel} onCancel={() => setLevelDialogOpen(false)} onConfirm={confirmResearchLevel} />}
 			<StockResearchOptions purpose={purpose} horizon={horizon} cost={cost} onPurpose={setPurpose} onHorizon={setHorizon} onCost={setCost} />
 			<div className={`stock-ai-shell ${hotStockSidebarCollapsed ? 'is-hot-collapsed' : ''}`.trim()}>
 					<HotStockSidebar data={hotRanks} state={hotRankState} error={hotRankError} activeSymbol={analysis?.symbol} collapsed={hotStockSidebarCollapsed} onToggle={toggleHotStockSidebar} onRefresh={() => void loadHotRanks(true)} onSelect={(symbol) => requestAnalysis(symbol)} />
@@ -558,7 +630,7 @@ function AnalysisExportFooter({ analysis }: { analysis: StockAIAnalysis }) {
 	</footer>;
 }
 
-function AnalysisSearch({ query, mode, directory, directoryState, onQuery, onSubmit, loading, llmProfiles, activeLLMProfileID, config, refreshKey, choiceBusy, onModelChange }: {
+function AnalysisSearch({ query, mode, directory, directoryState, onQuery, onSubmit, loading, llmProfiles, activeLLMProfileID, config, refreshKey, choiceBusy, onModelChange, desktopRuntime, analysisProvider, codexModel, codexEffort, onProviderChange, onCodexModelChange, onCodexEffortChange }: {
 	query: string;
 	mode: StockAIWorkspaceMode;
 	directory: StockDirectoryEntry[];
@@ -572,6 +644,13 @@ function AnalysisSearch({ query, mode, directory, directoryState, onQuery, onSub
 	refreshKey: string;
 	choiceBusy: boolean;
 	onModelChange: (value: string) => void;
+	desktopRuntime: ChatRuntime | null;
+	analysisProvider: StockAIProvider;
+	codexModel: string;
+	codexEffort: string;
+	onProviderChange: (value: StockAIProvider) => void;
+	onCodexModelChange: (value: string) => void;
+	onCodexEffortChange: (value: string) => void;
 }) {
 	const [expanded, setExpanded] = useState(false);
 	const [activeIndex, setActiveIndex] = useState(0);
@@ -607,11 +686,19 @@ function AnalysisSearch({ query, mode, directory, directoryState, onQuery, onSub
 		: directoryState === 'error'
 			? '目录暂不可用，可直接输入6位代码'
 			: `${directoryState === 'cached' ? '本机缓存' : '已缓存'} ${directory.length.toLocaleString('zh-CN')} 只A股 · 名称/代码均可搜索`;
+	const selectedDesktopModel = desktopRuntime?.models.find((model) => model.id === codexModel);
 	return (
 		<header className="stock-ai-search-hero">
 			<div className="stock-ai-research-options">
-				<label><span>模型</span><select value={activeLLMProfileID} onChange={(event) => onModelChange(event.target.value)} disabled={choiceBusy || loading || !llmProfiles.length} aria-label="完整分析模型"><option value="">当前模型</option>{llmProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name} · {profile.model}</option>)}</select></label>
-				<ReasoningControl config={config} refreshKey={JSON.stringify([activeLLMProfileID, llmProfiles.find((profile) => profile.id === activeLLMProfileID), refreshKey])} disabled={choiceBusy || loading} label="完整分析思考等级" />
+				<label><span>引擎</span><select value={analysisProvider} onChange={(event) => onProviderChange(event.target.value as StockAIProvider)} disabled={choiceBusy || loading} aria-label="个股分析引擎"><option value="hermes">Hermes</option><option value="codex_desktop" disabled={!desktopRuntime?.online || !desktopRuntime.models.length}>桌面 Codex{desktopRuntime?.online ? '' : '（离线）'}</option></select></label>
+				{analysisProvider === 'codex_desktop' ? <>
+					<label><span>模型</span><select value={codexModel} onChange={(event) => onCodexModelChange(event.target.value)} disabled={choiceBusy || loading || !desktopRuntime?.online || !desktopRuntime.models.length} aria-label="Codex 个股分析模型">{!desktopRuntime?.models.some((model) => model.id === codexModel) && <option value={codexModel}>{codexModel || '等待桌面模型目录'}</option>}{desktopRuntime?.models.map((model) => <option value={model.id} key={model.id}>{model.name || model.id}</option>)}</select></label>
+					<label><span>思考</span>{selectedDesktopModel?.efforts.length ? <select value={codexEffort} onChange={(event) => onCodexEffortChange(event.target.value)} disabled={choiceBusy || loading || !desktopRuntime?.online} aria-label="Codex 个股分析思考强度">{selectedDesktopModel.efforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}</select> : <small className="stock-ai-reasoning-unavailable">当前模型未提供思考等级选项</small>}</label>
+					{!desktopRuntime?.online && <small className="stock-ai-runtime-notice">Codex 桌面节点未在线；请检查 AI 对话接入设置。</small>}
+				</> : <>
+					<label><span>模型</span><select value={activeLLMProfileID} onChange={(event) => onModelChange(event.target.value)} disabled={choiceBusy || loading || !llmProfiles.length} aria-label="完整分析模型"><option value="">当前模型</option>{llmProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name} · {profile.model}</option>)}</select></label>
+					<ReasoningControl config={config} refreshKey={JSON.stringify([activeLLMProfileID, llmProfiles.find((profile) => profile.id === activeLLMProfileID), refreshKey])} disabled={choiceBusy || loading} label="完整分析思考等级" />
+				</>}
 			</div>
 			<div>
 				<span><BrainCircuit size={15} />STOCK DECISION SYSTEM</span>
@@ -639,7 +726,7 @@ function AnalysisSearch({ query, mode, directory, directoryState, onQuery, onSub
 	);
 }
 
-function ResearchLevelDialog({ value, onChange, onCancel, onConfirm }: { value: ResearchAnalysisLevel; onChange: (value: ResearchAnalysisLevel) => void; onCancel: () => void; onConfirm: () => void }) {
+function ResearchLevelDialog({ value, runtimeLabel, onChange, onCancel, onConfirm }: { value: ResearchAnalysisLevel; runtimeLabel: string; onChange: (value: ResearchAnalysisLevel) => void; onCancel: () => void; onConfirm: () => void }) {
 	const dialogRef = useRef<HTMLElement>(null);
 	useEffect(() => {
 		const handleKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -656,7 +743,7 @@ function ResearchLevelDialog({ value, onChange, onCancel, onConfirm }: { value: 
 	}, [onCancel, onChange, value]);
 	return <div className="stock-ai-level-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
 		<section ref={dialogRef} className="stock-ai-level-dialog" role="dialog" aria-modal="true" aria-labelledby="stock-ai-level-title">
-			<header><div><span><Sparkles size={14} />ANALYSIS MODE</span><h2 id="stock-ai-level-title">选择分析深度</h2><p>不同级别会使用不同数量的行情、公告和研究步骤。</p></div><button type="button" onClick={onCancel} aria-label="关闭分析级别选择"><X size={17} /></button></header>
+			<header><div><span><Sparkles size={14} />ANALYSIS MODE</span><h2 id="stock-ai-level-title">选择分析深度</h2><p>不同级别会使用不同数量的行情、公告和研究步骤。</p><small className="stock-ai-level-runtime">本轮模型与思考强度：{runtimeLabel}</small></div><button type="button" onClick={onCancel} aria-label="关闭分析级别选择"><X size={17} /></button></header>
 			<div className="stock-ai-level-list" role="radiogroup" aria-label="分析级别">
 				{researchLevelOptions.map((option) => <button type="button" role="radio" tabIndex={value === option.value ? 0 : -1} aria-checked={value === option.value} className={value === option.value ? 'active' : ''} onClick={() => onChange(option.value)} key={option.value}>
 					<span className="stock-ai-level-radio" aria-hidden="true">{value === option.value ? <CheckCircle2 size={18} /> : <span />}</span>
@@ -664,7 +751,7 @@ function ResearchLevelDialog({ value, onChange, onCancel, onConfirm }: { value: 
 					<span className="stock-ai-level-meta"><small>{option.coverage}</small><small>{option.tokens} · {option.time}</small></span>
 				</button>)}
 			</div>
-			<p className="stock-ai-level-note">Token 和耗时为估算值，实际结果取决于当前模型、思考等级、数据量和上游服务响应。级别越高表示证据覆盖更广，不代表绝对准确或收益确定。</p>
+			<p className="stock-ai-level-note">分析深度决定证据覆盖和研究步骤；本轮固定使用上方显示的模型与思考强度。Token 和耗时为估算值，结果不代表绝对准确或收益确定。</p>
 			<footer><button type="button" className="secondary" onClick={onCancel}>取消</button><button type="button" onClick={onConfirm}><Sparkles size={14} />开始分析</button></footer>
 		</section>
 	</div>;

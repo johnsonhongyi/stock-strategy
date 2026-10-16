@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { BackendConfig, requestJSON } from '../lib/backend';
 import { importLinkageSetup, parseLinkageSetupPackage, type LinkageSetupPackage, type LinkageSetupResult } from '../lib/linkage';
 import './system-status.css';
+import { TypographySettings } from './TypographySettings';
 import { MarketNetworkSettings } from './MarketNetworkSettings';
 
 type MarketStatus = {
@@ -282,6 +283,7 @@ export function SystemStatusWorkspace({ config, refreshKey }: { config: BackendC
 				</section>
 				<p className="system-status-storage-note"><CheckCircle2 size={15} />行情与任务日志保存在外置持久化目录；手动重试校验通过后更新行情库。接口生成时间：{formatTime(status.generated_at)}</p>
 			</>}
+			<TypographySettings />
 		</section>
 	);
 }

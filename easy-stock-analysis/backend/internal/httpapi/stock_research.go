@@ -56,17 +56,37 @@ func (s *Server) runStockResearch(ctx context.Context, request stockanalysis.Res
 	if request.AnalysisLevel == stockanalysis.ResearchLevelQuantitative {
 		return provisional, snapshot, nil
 	}
-	if s.hermesGateway == nil || !s.hermesGateway.Status().Available || !s.hermesGateway.Status().Configured {
-		analysis.AI.Status = "unavailable"
-		analysis.AI.Message = "模型不可用，当前只展示量化快照，没有AI研究结论"
-		return stockanalysis.QuantitativeOnly(analysis), snapshot, nil
-	}
 	model := "current-selected"
 	modelIdentity := ""
-	if s.settingsStore != nil {
-		values := s.settingsStore.Snapshot()
-		model = values.LLM.Model
-		modelIdentity = s.stockResearchModelIdentity()
+	var desktopPrompter *stockResearchCodexPrompter
+	var promptGateway hermes.Prompter
+	if request.AIProvider == "codex_desktop" {
+		var err error
+		desktopPrompter, err = s.newStockResearchCodexPrompter(request)
+		if err != nil {
+			analysis.AI.Status = "unavailable"
+			analysis.AI.Message = err.Error() + "；当前只展示量化快照，没有AI研究结论"
+			return stockanalysis.QuantitativeOnly(analysis), snapshot, nil
+		}
+		defer desktopPrompter.Close()
+		model = fmt.Sprintf("Codex Desktop · %s / %s", request.Model, request.ReasoningEffort)
+		modelIdentity = desktopPrompter.identity
+		promptGateway = desktopPrompter
+	} else {
+		if s.hermesGateway == nil || !s.hermesGateway.Status().Available || !s.hermesGateway.Status().Configured {
+			analysis.AI.Status = "unavailable"
+			analysis.AI.Message = "模型不可用，当前只展示量化快照，没有AI研究结论"
+			return stockanalysis.QuantitativeOnly(analysis), snapshot, nil
+		}
+		if s.settingsStore != nil {
+			values := s.settingsStore.Snapshot()
+			model = values.LLM.Model
+			modelIdentity = s.stockResearchModelIdentity()
+		}
+		promptGateway = s.hermesGateway
+		if s.usageGateway != nil {
+			promptGateway = s.usageGateway
+		}
 	}
 	modelCtx, cancel := context.WithTimeout(ctx, stockanalysis.ResearchTotalTimeout(request))
 	defer cancel()
@@ -80,13 +100,13 @@ func (s *Server) runStockResearch(ctx context.Context, request stockanalysis.Res
 			cancel()
 		}
 	}
-	promptGateway := s.usageGateway
-	if promptGateway == nil {
-		promptGateway = s.hermesGateway
-	}
 	guarded := researchPrompter{prompter: promptGateway, request: request, onCall: func(stage string, startedAt time.Time, promptBytes, responseBytes int, err error) {
 		s.logStockResearchModelCall(request.Symbol, request.AnalysisLevel, stage, startedAt, promptBytes, responseBytes, err)
 	}, consistent: func() bool {
+		if desktopPrompter != nil {
+			identity, err := s.stockResearchCodexIdentity(request)
+			return err == nil && identity == modelIdentity
+		}
 		if s.settingsStore == nil {
 			return true
 		}
@@ -96,7 +116,12 @@ func (s *Server) runStockResearch(ctx context.Context, request stockanalysis.Res
 	if persistenceErr != nil {
 		return stockanalysis.QuantitativeOnly(baseline), snapshot, persistenceErr
 	}
-	if s.settingsStore != nil {
+	if desktopPrompter != nil {
+		if identity, identityErr := s.stockResearchCodexIdentity(request); identityErr != nil || modelIdentity != identity {
+			err = fmt.Errorf("分析过程中 Codex Desktop 模型配置发生变化，请重新分析以保留一致的模型记录")
+			analysis.ResearchReport = nil
+		}
+	} else if s.settingsStore != nil {
 		if modelIdentity != s.stockResearchModelIdentity() {
 			err = fmt.Errorf("分析过程中模型配置发生变化，请重新分析以保留一致的模型记录")
 			analysis.ResearchReport = nil
