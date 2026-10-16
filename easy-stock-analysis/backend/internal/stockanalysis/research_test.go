@@ -480,7 +480,7 @@ func TestResearchFailureDoesNotApplyPartialAdvice(t *testing.T) {
 	if err := RunResearch(context.Background(), p, &snapshot, &analysis, ResearchRequest{}, "test", nil, nil); err == nil {
 		t.Fatal("expected failure")
 	}
-	if analysis.ResearchReport != nil || analysis.Conclusion != before || p.calls > 3 {
+	if analysis.ResearchReport != nil || analysis.Conclusion != before || p.calls > 3 || len(analysis.ResearchAttempts) == 0 || analysis.ResearchAttempts[0].Error != "" {
 		t.Fatal("failed research changed analysis or exhausted unbounded calls")
 	}
 }

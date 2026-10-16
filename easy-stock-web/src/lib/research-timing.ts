@@ -6,7 +6,7 @@ export function researchTiming(job: ResearchJob) {
 	const started = Date.parse(job.started_at);
 	const ended = Date.parse(job.completed_at || job.updated_at);
 	const total = Number.isFinite(started) && Number.isFinite(ended) ? ms(ended - started) : null;
-	const attempts = (job.analysis?.research_report?.attempts || []).map(attempt => {
+	const attempts = (job.analysis?.research_report?.attempts || job.analysis?.research_attempts || []).map(attempt => {
 		const timings = attempt.bridge_timings || {};
 		const call = ms(attempt.duration_ms), queue = ms(timings.queue_wait_ms), setup = ms(timings.turn_started_ms);
 		const completed = ms(timings.bridge_to_completed_ms), first = ms(timings.first_token_ms);

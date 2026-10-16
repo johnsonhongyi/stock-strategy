@@ -32,8 +32,8 @@ export function StockResearchProgress({ job, onCancel }: { job: ResearchJob | nu
 }
 
 function ResearchTiming({ job }: { job: ResearchJob }) {
-	if (!job.analysis?.research_report?.attempts.length) return null;
 	const timing = researchTiming(job);
+ if (!timing.attempts.length) return null;
 	const seconds = (value: number | null) => value === null ? '未采集' : `${(value / 1000).toFixed(2)} 秒`;
 	const labels: Record<string, string> = { quick: '快速研判', outline: '问题梳理', core: '核心判断', trade: '条件整理', repair: '结构修复' };
 	return <details className="stock-research-timing"><summary>耗时分解 · AI调用 {seconds(timing.calls)} · 资料与校验 {seconds(timing.preparation)}</summary>

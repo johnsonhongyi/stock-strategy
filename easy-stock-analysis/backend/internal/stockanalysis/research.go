@@ -24,7 +24,7 @@ const researchOutlineInstructions = `你是A股证据研究员。任务是独立
 `
 
 const researchQuickInstructions = `你是A股快速研究员，只基于输入证据和量化基线给出有限的初步判断。不得调用工具、不得凭记忆补充事实，不要把量化评分当成事实，不输出胜率、收益承诺或输入中没有的价格。
-` + researchEvidenceRules + `快速研判只给初步研究判断，不生成交易计划，decision.status必须为no_plan，conditions、invalidation_ids、scenarios均为空数组，price_plan为null。evidence_level仅limited或insufficient。headline至多35字，thesis至多180字，support/counter各至多2条且每条至多100字。只输出合法JSON，不要Markdown：{"headline":"不超过35字","thesis":{"text":"核心判断及限制","kind":"inference","source_ids":["编号"]},"support":[{"text":"支持依据","kind":"fact|opinion|inference","source_ids":["编号"]}],"counter":[{"text":"反向证据或缺口","kind":"fact|opinion|inference","source_ids":["编号"]}],"alternatives":[],"main_conflict":"主要不确定性","evidence_level":"limited|insufficient","limitations":["信息缺口"],"conditions":[],"invalidation_ids":[],"scenarios":[],"decision":{"status":"no_plan","mode":"short_term|non_short","horizon":"short|swing|medium","new_position":"不生成新仓计划","existing_position":"不根据初步判断调整仓位","reason":"快速研判不生成交易计划及证据限制","price_plan":null},"baseline_relation":"agree|disagree|insufficient","baseline_reason":"与量化基线的关系"}
+` + researchEvidenceRules + `rule_baseline没有来源编号，只能用于baseline_relation和baseline_reason，不可写成无source_ids的thesis/support/counter；无法引用来源的信息缺口放入limitations，支持与反证不足时使用空数组，禁止编造引用。快速研判只给初步研究判断，不生成交易计划，decision.status必须为no_plan，conditions、invalidation_ids、scenarios均为空数组，price_plan为null。evidence_level仅limited或insufficient。headline至多35字，thesis至多180字，support/counter各至多2条且每条至多100字。只输出合法JSON，不要Markdown：{"headline":"不超过35字","thesis":{"text":"核心判断及限制","kind":"inference","source_ids":["编号"]},"support":[{"text":"支持依据","kind":"fact|opinion|inference","source_ids":["编号"]}],"counter":[{"text":"反向证据或缺口","kind":"fact|opinion|inference","source_ids":["编号"]}],"alternatives":[],"main_conflict":"主要不确定性","evidence_level":"limited|insufficient","limitations":["信息缺口"],"conditions":[],"invalidation_ids":[],"scenarios":[],"decision":{"status":"no_plan","mode":"short_term|non_short","horizon":"short|swing|medium","new_position":"不生成新仓计划","existing_position":"不根据初步判断调整仓位","reason":"快速研判不生成交易计划及证据限制","price_plan":null},"baseline_relation":"agree|disagree|insufficient","baseline_reason":"与量化基线的关系"}
 [轻量证据包]
 `
 
@@ -108,6 +108,12 @@ func RunResearch(ctx context.Context, prompter hermes.Prompter, snapshot *Resear
 		return runStandardResearch(ctx, prompter, snapshot, analysis, request, model, progress)
 	}
 	attempts := []ResearchAttempt{}
+	defer func() {
+		analysis.ResearchAttempts = append([]ResearchAttempt(nil), attempts...)
+		for i := range analysis.ResearchAttempts {
+			analysis.ResearchAttempts[i].Error = ""
+		}
+	}()
 	options := func(stage string) promptJSONObjectOptions {
 		return promptJSONObjectOptions{maxAttempts: 1, disableTools: true, onAttempt: func(a promptJSONAttempt) {
 			attempts = append(attempts, ResearchAttempt{Stage: stage, DurationMS: a.durationMS, PromptBytes: a.promptBytes, ResponseBytes: a.responseBytes, Error: a.err, BridgeTimings: a.bridgeTimings, TokenUsage: a.diagnosticTokens})
@@ -200,6 +206,12 @@ func RunResearch(ctx context.Context, prompter hermes.Prompter, snapshot *Resear
 
 func runQuickResearch(ctx context.Context, prompter hermes.Prompter, snapshot *ResearchSnapshot, analysis *Analysis, request ResearchRequest, model string, progress ResearchProgress) error {
 	attempts := []ResearchAttempt{}
+	defer func() {
+		analysis.ResearchAttempts = append([]ResearchAttempt(nil), attempts...)
+		for i := range analysis.ResearchAttempts {
+			analysis.ResearchAttempts[i].Error = ""
+		}
+	}()
 	pack := buildResearchEvidencePack(*snapshot, request, researchPromptSynthesis, nil)
 	progress("synthesizing", "AI正在快速研判")
 	result, err := promptJSONObjectWithOptions[ResearchSynthesis](ctx, prompter, researchQuickPromptWithPack(*snapshot, request, pack), "快速研判", promptJSONObjectOptions{maxAttempts: 1, disableTools: true, onAttempt: func(a promptJSONAttempt) {
@@ -227,6 +239,12 @@ func runQuickResearch(ctx context.Context, prompter hermes.Prompter, snapshot *R
 
 func runStandardResearch(ctx context.Context, prompter hermes.Prompter, snapshot *ResearchSnapshot, analysis *Analysis, request ResearchRequest, model string, progress ResearchProgress) error {
 	attempts := []ResearchAttempt{}
+	defer func() {
+		analysis.ResearchAttempts = append([]ResearchAttempt(nil), attempts...)
+		for i := range analysis.ResearchAttempts {
+			analysis.ResearchAttempts[i].Error = ""
+		}
+	}()
 	repairUsed := false
 	options := func(stage string) promptJSONObjectOptions {
 		return promptJSONObjectOptions{maxAttempts: 1, disableTools: true, onAttempt: func(a promptJSONAttempt) {

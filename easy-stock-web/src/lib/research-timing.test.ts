@@ -12,6 +12,10 @@ describe('researchTiming', () => {
   const result = researchTiming(job([{ stage: 'quick', duration_ms: 38994 }]));
   expect(result.attempts[0]).toMatchObject({ setup: null, queue: null, waiting: null, output: null, other: null });
  });
+ it('shows measured failed calls without requiring an accepted AI report', () => {
+  const result = researchTiming({ started_at: '2026-10-16T19:00:00Z', completed_at: '2026-10-16T19:00:20Z', analysis: { research_attempts: [{ stage: 'quick', duration_ms: 15000 }] } } as ResearchJob);
+  expect(result.calls).toBe(15000); expect(result.preparation).toBe(5000);
+ });
  it('sums multiple calls and rejects invalid dates or durations', () => {
   expect(researchTiming(job([{ duration_ms: 1000 }, { duration_ms: 2000 }])).calls).toBe(3000);
   expect(researchTiming(job([{ duration_ms: -1 }], 'invalid')).preparation).toBeNull();

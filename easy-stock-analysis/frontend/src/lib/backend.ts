@@ -982,6 +982,7 @@ export type StockAIAnalysis = {
 	analysis_id?: string;
 	snapshot_id?: string;
 	research_report?: ResearchReport;
+ research_attempts?: ResearchReport['attempts'];
 	symbol: string;
 	name: string;
 	generated_at: string;

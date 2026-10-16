@@ -128,7 +128,9 @@ func (s *Server) runStockResearch(ctx context.Context, request stockanalysis.Res
 		}
 	}
 	if err != nil {
+		attempts := analysis.ResearchAttempts
 		analysis = baseline
+		analysis.ResearchAttempts = attempts
 		analysis.AI = stockanalysis.AISynthesisStatus{Status: "error", Model: model, Message: runtimelog.Redact(err.Error()) + "；保留量化快照，不将其标为AI研究成功"}
 		s.logStockAnalysisStage(request.Symbol, "research", "failed", time.Time{}, 0, err)
 		return stockanalysis.QuantitativeOnly(analysis), snapshot, nil
