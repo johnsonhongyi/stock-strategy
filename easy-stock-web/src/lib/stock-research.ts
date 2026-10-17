@@ -48,8 +48,8 @@ export function researchModelEffortLabel(model?: string, effort?: string) {
 	const tokens = id.split(/[^a-z0-9]+/).filter(Boolean);
 	const family = ['luna', 'sol', 'astra', 'terra'].find((value) => tokens.includes(value)) || tokens[tokens.length - 1] || id;
 	const normalizedEffort = (effort || '').trim().toLowerCase();
-	const effortCode: Record<string, string> = { none: '', minimal: 'min', low: 'l', medium: 'm', high: 'h', xhigh: 'x', max: 'max' };
-	const suffix = effortCode[normalizedEffort] ?? normalizedEffort.slice(0, 1);
+	const effortCode: Record<string, string> = { none: '', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' };
+	const suffix = effortCode[normalizedEffort] ?? normalizedEffort;
 	return suffix ? family + '-' + suffix : family;
 }
 export const conditionStatusLabel = (status: string) => ({ pending: '待观察', met: '已满足', not_met: '窗口结束未满足', not_yet: '尚未满足', unavailable: '数据不足', manual_review: '需人工核实' }[status] || '待观察');

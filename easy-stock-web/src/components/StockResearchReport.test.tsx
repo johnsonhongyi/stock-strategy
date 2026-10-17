@@ -22,14 +22,16 @@ describe('Evidence-led stock research',()=>{
 		expect(researchLevelShortLabel('quantitative')).toBe('\u91cf');
 		expect(formatCompactResearchDuration(59_000)).toBe('59\u79d2');
 		expect(formatCompactResearchDuration(180_000)).toBe('3\u5206');
-		expect(researchModelEffortLabel('gpt-6-luna', 'medium')).toBe('luna-m');
-		expect(researchModelEffortLabel('gpt-6-luna', 'xhigh')).toBe('luna-x');
-		expect(researchModelEffortLabel('gpt-6-sol', 'high')).toBe('sol-h');
+		expect(researchModelEffortLabel('gpt-6-luna', 'medium')).toBe('luna-medium');
+		expect(researchModelEffortLabel('gpt-6-luna', 'xhigh')).toBe('luna-xhigh');
+		expect(researchModelEffortLabel('gpt-6-luna', 'max')).toBe('luna-max');
+		expect(researchModelEffortLabel('gpt-6-sol', 'low')).toBe('sol-low');
+		expect(researchModelEffortLabel('gpt-6-sol', 'high')).toBe('sol-high');
 		expect(filterResearchHistory(items, 'standard').map((item) => item.id)).toEqual(['s1', 's2']);
 		const markup = renderToStaticMarkup(<StockResearchHistory items={items} activeID="s1" onOpen={()=>{}} onRemove={()=>{}}/>);
 		expect(markup).toContain('aria-label="\u6309\u5206\u6790\u6df1\u5ea6\u7b5b\u9009\u7814\u7a76\u8bb0\u5f55"');
 		expect(markup).toContain('aria-label="\u8017\u65f6 3\u5206"');
-		expect(markup).toContain('aria-label="\u6a21\u578b\u4e0e\u63a8\u7406\u5f3a\u5ea6 luna-m"');
+		expect(markup).toContain('aria-label="\u6a21\u578b\u4e0e\u63a8\u7406\u5f3a\u5ea6 luna-medium"');
 	});
 	it('keeps missing evidence and no-plan decisions visible without fabricated prices',()=>{
 		const markup=renderToStaticMarkup(<StockResearchReportView analysis={analysis}/>);
