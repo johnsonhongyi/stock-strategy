@@ -8,6 +8,39 @@ import (
 	"time"
 )
 
+func TestDesktopBridgeTestTerminalJobsAndSessionsAreRemoved(t *testing.T) {
+	s, _, exec := aiPeerFixture(t)
+	db, err := s.chatDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, status := range []string{"completed", "failed", "expired", "cancelled"} {
+		id, sessionID := "bridge-test-"+status, "session-"+status
+		exec("INSERT INTO desktop_chat_sessions(id,owner,node_id,workspace_id,model,effort) VALUES(?,?,?,?,?,?)", sessionID, "local-desktop", "desk", "ws", "gpt-6-luna", "low")
+		exec("INSERT INTO desktop_chat_jobs(id,session_id,owner,node_id,workspace_id,body,status,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?)", id, sessionID, "local-desktop", "desk", "ws", `{"bridge_test":true}`, status, time.Now().Unix(), time.Now().Add(10*time.Minute).Unix())
+
+		request := httptest.NewRequest("DELETE", "/api/v1/ai/desktop/jobs/"+id, nil)
+		request.SetPathValue("id", id)
+		response := httptest.NewRecorder()
+		s.desktopChatJob(response, request)
+		if response.Code != 200 {
+			t.Fatalf("cleanup %s: %d %s", status, response.Code, response.Body.String())
+		}
+		for _, table := range []string{"desktop_chat_jobs", "desktop_chat_sessions"} {
+			column, value := "id", id
+			if table == "desktop_chat_sessions" {
+				value = sessionID
+			}
+			var count int
+			if err := db.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE "+column+"=?", value).Scan(&count); err != nil || count != 0 {
+				t.Fatalf("cleanup %s %s: count=%d err=%v", status, table, count, err)
+			}
+		}
+	}
+}
+
 func TestDesktopChatQueueAndCancellation(t *testing.T) {
 	s, peer, exec := aiPeerFixture(t)
 	db, err := s.chatDB()

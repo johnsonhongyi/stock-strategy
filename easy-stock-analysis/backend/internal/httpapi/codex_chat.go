@@ -350,7 +350,7 @@ func (s *Server) desktopChatJob(w http.ResponseWriter, r *http.Request) {
 	var testJob struct {
 		BridgeTest bool `json:"bridge_test"`
 	}
-	if r.Method == http.MethodDelete && json.Unmarshal([]byte(body), &testJob) == nil && testJob.BridgeTest && (status == "completed" || status == "failed") {
+	if r.Method == http.MethodDelete && json.Unmarshal([]byte(body), &testJob) == nil && testJob.BridgeTest && (status == "completed" || status == "failed" || status == "expired" || status == "cancelled") {
 		_, _ = db.Exec("DELETE FROM desktop_chat_jobs WHERE id=? AND owner=?", id, owner)
 		_, _ = db.Exec("DELETE FROM desktop_chat_sessions WHERE id=? AND owner=?", sid, owner)
 	}
