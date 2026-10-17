@@ -29,16 +29,21 @@ type ResearchJob struct {
 }
 
 type ResearchJobSummary struct {
-	ID        string          `json:"id"`
-	Request   ResearchRequest `json:"request"`
-	Name      string          `json:"name"`
-	Status    string          `json:"status"`
-	Stage     string          `json:"stage"`
-	Message   string          `json:"message"`
-	Headline  string          `json:"headline"`
-	Score     int             `json:"score"`
-	StartedAt time.Time       `json:"started_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID              string          `json:"id"`
+	Request         ResearchRequest `json:"request"`
+	Name            string          `json:"name"`
+	Status          string          `json:"status"`
+	Stage           string          `json:"stage"`
+	Message         string          `json:"message"`
+	Headline        string          `json:"headline"`
+	Score           int             `json:"score"`
+	StartedAt       time.Time       `json:"started_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
+	CompletedAt     *time.Time      `json:"completed_at,omitempty"`
+	DurationMS      int64           `json:"duration_ms,omitempty"`
+	AnalysisLevel   ResearchLevel   `json:"analysis_level,omitempty"`
+	Model           string          `json:"model,omitempty"`
+	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
 }
 
 func (job ResearchJob) Public() ResearchJob {
@@ -50,11 +55,34 @@ func (job ResearchJob) Public() ResearchJob {
 	return job
 }
 func (job ResearchJob) Summary() ResearchJobSummary {
-	item := ResearchJobSummary{ID: job.ID, Request: job.Request, Status: job.Status, Stage: job.Stage, Message: job.Message, StartedAt: job.StartedAt, UpdatedAt: job.UpdatedAt, Name: job.Request.Symbol}
+	item := ResearchJobSummary{
+		ID: job.ID, Request: job.Request, Status: job.Status, Stage: job.Stage, Message: job.Message,
+		StartedAt: job.StartedAt, UpdatedAt: job.UpdatedAt, CompletedAt: job.CompletedAt, Name: job.Request.Symbol,
+		AnalysisLevel: job.Request.AnalysisLevel, Model: job.Request.Model, ReasoningEffort: job.Request.ReasoningEffort,
+	}
+	if job.Status != "queued" && job.Status != "running" {
+		endedAt := job.UpdatedAt
+		if job.CompletedAt != nil {
+			endedAt = *job.CompletedAt
+		}
+		if !job.StartedAt.IsZero() && !endedAt.IsZero() && !endedAt.Before(job.StartedAt) {
+			item.DurationMS = endedAt.Sub(job.StartedAt).Milliseconds()
+		}
+	}
 	if job.Analysis != nil {
 		item.Name = job.Analysis.Name
 		if job.Analysis.ResearchReport != nil {
 			item.Headline = job.Analysis.Conclusion.Headline
+			report := job.Analysis.ResearchReport
+			if item.AnalysisLevel == "" {
+				item.AnalysisLevel = report.AnalysisLevel
+			}
+			if item.Model == "" {
+				item.Model = report.Model
+			}
+			if item.ReasoningEffort == "" {
+				item.ReasoningEffort = report.Request.ReasoningEffort
+			}
 		}
 		item.Score = job.Analysis.Scorecard.Overall
 	}

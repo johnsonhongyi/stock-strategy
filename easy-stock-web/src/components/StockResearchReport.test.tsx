@@ -1,15 +1,36 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { StockAIAnalysis } from '../lib/backend';
-import { conditionStatusLabel, isResearchRunning, researchConditionValue, researchPlanText, safeResearchURL, type ResearchReport } from '../lib/stock-research';
-import { StockResearchOptions, StockResearchProgress, StockResearchReportView } from './StockResearchReport';
+import { conditionStatusLabel, filterResearchHistory, formatCompactResearchDuration, isResearchRunning, researchConditionValue, researchLevelShortLabel, researchModelEffortLabel, researchPlanText, safeResearchURL, type ResearchJobSummary, type ResearchReport } from '../lib/stock-research';
+import { StockResearchHistory, StockResearchOptions, StockResearchProgress, StockResearchReportView } from './StockResearchReport';
 
 const report: ResearchReport = {
 	headline:'证据不足，保留观察', thesis:{text:'主判断只是研究解释',kind:'inference',source_ids:['m-price']}, support:[],counter:[],alternatives:[],main_conflict:'缺少业务兑现证据',evidence_level:'insufficient',limitations:['缺少资料不等于没有风险'],conditions:[{id:'c1',text:'失效时停止沿用判断',metric:'close',operator:'lte',anchor_id:'ma20',threshold:10,window:'next_close',source_ids:['m-price'],status:'pending'}],invalidation_ids:['c1'],scenarios:[],decision:{status:'no_plan',mode:'non_short',horizon:'swing',new_position:'暂不形成新仓计划',existing_position:'重新核实风险',reason:'证据不足',price_plan:null},baseline_relation:'disagree',baseline_reason:'历史强势不能推断未来',snapshot_id:'snapshot-123',snapshot_version:2,prompt_version:'stock-research-v1',request:{symbol:'600519.SH',purpose:'holding',horizon:'swing',cost_price:11},model:'fixture-model',generated_at:'2026-09-08T14:00:00Z',cutoff_at:'2026-09-08T13:00:00Z',sources:[{id:'m-price',kind:'calculation',title:'计算资料',content:'价格统计',provider:'fixture',captured_at:'2026-09-08T13:00:00Z',time_status:'dated'}],anchors:[{id:'ma20',price:10,label:'20日均价',source_id:'m-price',as_of:'2026-09-08'}],questions:[],attempts:[],validation:'references_checked',validation_notes:['不是语义准确性认证'],
 };
 const analysis = {name:'测试股票',symbol:'600519.SH',analysis_id:'analysis-123',scorecard:{overall:60},research_report:report} as StockAIAnalysis;
 
+const historyItem = (id: string, level: ResearchJobSummary['analysis_level'], effort: string, durationMS: number): ResearchJobSummary => ({
+	id, request: { symbol: '600519.SH', purpose: 'observe', horizon: 'swing', analysis_level: level, model: 'gpt-6-luna', reasoning_effort: effort },
+	name: '贵州茅台', headline: '保留观察', score: 60, status: 'succeeded', stage: 'completed', message: '研究完成',
+	started_at: '2026-10-18T01:00:00Z', updated_at: '2026-10-18T01:03:00Z', duration_ms: durationMS,
+	analysis_level: level, model: 'gpt-6-luna', reasoning_effort: effort,
+});
+
 describe('Evidence-led stock research',()=>{
+	it('shows compact level, duration and model labels and filters same-level reports',()=>{
+		const items = [historyItem('q', 'quantitative', 'none', 59_000), historyItem('s1', 'standard', 'medium', 180_000), historyItem('s2', 'standard', 'high', 89_000)];
+		expect(researchLevelShortLabel('quantitative')).toBe('\u91cf');
+		expect(formatCompactResearchDuration(59_000)).toBe('59\u79d2');
+		expect(formatCompactResearchDuration(180_000)).toBe('3\u5206');
+		expect(researchModelEffortLabel('gpt-6-luna', 'medium')).toBe('luna-m');
+		expect(researchModelEffortLabel('gpt-6-luna', 'xhigh')).toBe('luna-x');
+		expect(researchModelEffortLabel('gpt-6-sol', 'high')).toBe('sol-h');
+		expect(filterResearchHistory(items, 'standard').map((item) => item.id)).toEqual(['s1', 's2']);
+		const markup = renderToStaticMarkup(<StockResearchHistory items={items} activeID="s1" onOpen={()=>{}} onRemove={()=>{}}/>);
+		expect(markup).toContain('aria-label="\u6309\u5206\u6790\u6df1\u5ea6\u7b5b\u9009\u7814\u7a76\u8bb0\u5f55"');
+		expect(markup).toContain('aria-label="\u8017\u65f6 3\u5206"');
+		expect(markup).toContain('aria-label="\u6a21\u578b\u4e0e\u63a8\u7406\u5f3a\u5ea6 luna-m"');
+	});
 	it('keeps missing evidence and no-plan decisions visible without fabricated prices',()=>{
 		const markup=renderToStaticMarkup(<StockResearchReportView analysis={analysis}/>);
 		expect(markup).toContain('暂不形成交易计划');

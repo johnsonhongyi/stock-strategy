@@ -10,6 +10,26 @@ import (
 	"time"
 )
 
+func TestResearchJobSummaryCarriesLevelModelAndElapsedTime(t *testing.T) {
+	started := time.Date(2026, 10, 18, 1, 0, 0, 0, time.UTC)
+	completed := started.Add(3 * time.Minute)
+	job := ResearchJob{
+		ID: "research-summary", Request: ResearchRequest{Symbol: "600519.SH", AnalysisLevel: ResearchLevelStandard, Model: "gpt-6-luna", ReasoningEffort: "medium"},
+		Status: "succeeded", StartedAt: started, UpdatedAt: completed, CompletedAt: &completed,
+	}
+	got := job.Summary()
+	if got.AnalysisLevel != ResearchLevelStandard || got.Model != "gpt-6-luna" || got.ReasoningEffort != "medium" {
+		t.Fatalf("summary runtime metadata = %+v", got)
+	}
+	if got.DurationMS != 180000 || got.CompletedAt == nil || !got.CompletedAt.Equal(completed) {
+		t.Fatalf("summary timing = %+v", got)
+	}
+	job.Status = "running"
+	if active := job.Summary(); active.DurationMS != 0 {
+		t.Fatalf("running job should not expose a completed duration: %d", active.DurationMS)
+	}
+}
+
 func TestResearchStoreImmutableVersionsRecoveryAndDeletion(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "research.db")

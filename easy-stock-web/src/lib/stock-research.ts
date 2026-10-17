@@ -22,11 +22,36 @@ export type ResearchReport = {
 };
 export type ResearchVerification = { checked_at: string; baseline_at: string; source: string; summary: string; checks: Array<{ condition_id: string; status: string; observed?: number; as_of?: string; detail: string }> };
 export type ResearchJob = { id: string; request: ResearchRequest; status: string; stage: string; message: string; error?: string; started_at: string; updated_at: string; completed_at?: string; analysis?: StockAIAnalysis; verification?: ResearchVerification };
-export type ResearchJobSummary = Pick<ResearchJob, 'id' | 'request' | 'status' | 'stage' | 'message' | 'started_at' | 'updated_at'> & { name: string; headline: string; score: number };
+export type ResearchJobSummary = Pick<ResearchJob, 'id' | 'request' | 'status' | 'stage' | 'message' | 'started_at' | 'updated_at'> & { name: string; headline: string; score: number; completed_at?: string; duration_ms?: number; analysis_level?: ResearchAnalysisLevel; model?: string; reasoning_effort?: string };
 
 export const isResearchRunning = (job?: Pick<ResearchJob, 'status'> | null) => !!job && (job.status === 'queued' || job.status === 'running');
 export const evidenceLevelLabel = (level: string) => ({ sufficient: '较充分', limited: '有限', insufficient: '不足' }[level] || '未评估');
 export const researchLevelLabel = (level?: ResearchAnalysisLevel) => ({ quantitative: '量化速览', quick: 'AI快速研判', standard: 'AI标准研判', deep: 'AI深度研究' }[level || 'deep'] || 'AI深度研究');
+export type ResearchLevelFilter = 'all' | ResearchAnalysisLevel;
+export function researchSummaryLevel(item: Pick<ResearchJobSummary, 'analysis_level' | 'request'>): ResearchAnalysisLevel {
+	return item.analysis_level || item.request.analysis_level || 'deep';
+}
+export function filterResearchHistory(items: ResearchJobSummary[], level: ResearchLevelFilter = 'all') {
+	return level === 'all' ? items : items.filter((item) => researchSummaryLevel(item) === level);
+}
+export function researchLevelShortLabel(level?: ResearchAnalysisLevel) {
+	return ({ quantitative: '量', quick: '快', standard: '标', deep: '深' } as const)[level || 'deep'] || '深';
+}
+export function formatCompactResearchDuration(durationMS?: number) {
+	if (durationMS == null || !Number.isFinite(durationMS) || durationMS < 0) return '';
+	const seconds = Math.round(durationMS / 1000);
+	return seconds < 60 ? seconds + '秒' : Math.round(seconds / 60) + '分';
+}
+export function researchModelEffortLabel(model?: string, effort?: string) {
+	const id = (model || '').trim().toLowerCase();
+	if (!id) return '';
+	const tokens = id.split(/[^a-z0-9]+/).filter(Boolean);
+	const family = ['luna', 'sol', 'astra', 'terra'].find((value) => tokens.includes(value)) || tokens[tokens.length - 1] || id;
+	const normalizedEffort = (effort || '').trim().toLowerCase();
+	const effortCode: Record<string, string> = { none: '', minimal: 'min', low: 'l', medium: 'm', high: 'h', xhigh: 'x', max: 'max' };
+	const suffix = effortCode[normalizedEffort] ?? normalizedEffort.slice(0, 1);
+	return suffix ? family + '-' + suffix : family;
+}
 export const conditionStatusLabel = (status: string) => ({ pending: '待观察', met: '已满足', not_met: '窗口结束未满足', not_yet: '尚未满足', unavailable: '数据不足', manual_review: '需人工核实' }[status] || '待观察');
 export function safeResearchURL(value?: string) {
 	try { const url = new URL(value || ''); return ['https:', 'http:'].includes(url.protocol) ? url.href : undefined; } catch { return undefined; }

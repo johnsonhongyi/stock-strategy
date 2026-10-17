@@ -3,7 +3,7 @@ import './stock-research.css';
 import { ArrowUpRight, CheckCircle2, CircleAlert, FileText, History, LoaderCircle, SearchCheck, Square, Trash2 } from 'lucide-react';
 import type { StockAIAnalysis } from '../lib/backend';
 import { researchTiming } from '../lib/research-timing';
-import { conditionStatusLabel, evidenceLevelLabel, isResearchRunning, researchConditionValue, researchLevelLabel, safeResearchURL, type ResearchClaim, type ResearchJob, type ResearchJobSummary, type ResearchReport, type ResearchRequest, type ResearchVerification } from '../lib/stock-research';
+import { conditionStatusLabel, evidenceLevelLabel, filterResearchHistory, formatCompactResearchDuration, isResearchRunning, researchConditionValue, researchLevelLabel, researchLevelShortLabel, researchModelEffortLabel, researchSummaryLevel, safeResearchURL, type ResearchClaim, type ResearchJob, type ResearchJobSummary, type ResearchLevelFilter, type ResearchReport, type ResearchRequest, type ResearchVerification } from '../lib/stock-research';
 
 export function StockResearchOptions({ purpose, horizon, cost, onPurpose, onHorizon, onCost }: { purpose: ResearchRequest['purpose']; horizon: ResearchRequest['horizon']; cost: string; onPurpose: (value: ResearchRequest['purpose']) => void; onHorizon: (value: ResearchRequest['horizon']) => void; onCost: (value: string) => void }) {
 	return <div className="stock-research-options">
@@ -55,13 +55,35 @@ function formatElapsedTime(startedAt: string, endAt: number) {
 
 export function StockResearchHistory({ items, activeID, onOpen, onRemove }: { items: ResearchJobSummary[]; activeID: string; onOpen: (id: string) => void; onRemove: (id: string) => void }) {
 	const [expanded, setExpanded] = useState(false);
+	const [levelFilter, setLevelFilter] = useState<ResearchLevelFilter>('all');
 	if (!items.length) return null;
+	const visibleItems = filterResearchHistory(items, levelFilter);
+	const filters: Array<{ value: ResearchLevelFilter; label: string }> = [
+		{ value: 'all', label: '全部' }, { value: 'quantitative', label: '量化' }, { value: 'quick', label: '快速' },
+		{ value: 'standard', label: '标准' }, { value: 'deep', label: '深度' },
+	];
 	return <section className="stock-research-history" aria-label="研究历史">
-		<header><History size={15} /><strong>研究记录</strong><span>{items.length}</span><button type="button" onClick={() => setExpanded(!expanded)}>{expanded ? '收起' : '全部记录'}</button></header>
-		<div className={expanded ? 'expanded' : ''}>{items.slice(0, expanded ? 50 : 4).map((item) => <article key={item.id} className={item.id === activeID ? 'active' : ''}>
-			<button type="button" onClick={() => onOpen(item.id)}><strong>{item.name}</strong><time>{formatDate(item.started_at)}</time><span>{isResearchRunning(item) ? item.message : item.headline || item.message}</span></button>
-			<button type="button" disabled={isResearchRunning(item)} onClick={() => onRemove(item.id)} title={`删除${item.name}本次记录`} aria-label={`删除${item.name}本次记录`}><Trash2 size={13} /></button>
-		</article>)}</div>
+		<header><History size={15} /><strong>研究记录</strong><span>{visibleItems.length === items.length ? items.length : visibleItems.length + '/' + items.length}</span><button type="button" onClick={() => setExpanded(!expanded)}>{expanded ? '收起' : '展开'}</button></header>
+		<div className="stock-research-filters" role="group" aria-label="按分析深度筛选研究记录">{filters.map(({ value, label }) => {
+			const count = value === 'all' ? items.length : filterResearchHistory(items, value).length;
+			return <button type="button" key={value} aria-pressed={levelFilter === value} onClick={() => { setLevelFilter(value); setExpanded(value !== 'all'); }}>{label}<span>{count}</span></button>;
+		})}</div>
+		{visibleItems.length ? <div className={`stock-research-history-list${expanded ? ' expanded' : ''}`}>{visibleItems.slice(0, expanded ? 50 : 4).map((item) => {
+			const level = researchSummaryLevel(item);
+			const duration = formatCompactResearchDuration(item.duration_ms);
+			const model = researchModelEffortLabel(item.model || item.request.model, item.reasoning_effort || item.request.reasoning_effort);
+			return <article key={item.id} className={item.id === activeID ? 'active' : ''}>
+				<button type="button" onClick={() => onOpen(item.id)}>
+					<strong className="stock-research-card-title">{item.name}<span className={'stock-research-tag level-' + level} title={researchLevelLabel(level)} aria-label={'分析深度 ' + researchLevelLabel(level)}>{researchLevelShortLabel(level)}</span>
+						{duration && <span className="stock-research-tag stock-research-duration" aria-label={'耗时 ' + duration}>{duration}</span>}
+						{model && <span className="stock-research-tag stock-research-model" title={(item.model || item.request.model || '模型') + ' / ' + (item.reasoning_effort || item.request.reasoning_effort || '未记录强度')} aria-label={'模型与推理强度 ' + model}>{model}</span>}
+					</strong>
+					<time>{formatDate(item.started_at)}</time>
+					<span className="stock-research-summary">{isResearchRunning(item) ? item.message : item.headline || item.message}</span>
+				</button>
+				<button type="button" disabled={isResearchRunning(item)} onClick={() => onRemove(item.id)} title={'删除' + item.name + '本次记录'} aria-label={'删除' + item.name + '本次记录'}><Trash2 size={13} /></button>
+			</article>;
+		})}</div> : <p className="stock-research-history-empty">暂无该分析深度的研究记录</p>}
 	</section>;
 }
 
