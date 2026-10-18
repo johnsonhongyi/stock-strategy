@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAutoRefresh } from './use-auto-refresh';
 import { BackendConfig, SourceMeta, ThemeOverview, requestJSON } from './backend';
 
 export type ThemeProgress = {
@@ -59,6 +60,7 @@ export function useThemeOverview(config: BackendConfig | null, active: boolean) 
 		if (active) void run(false);
 		return () => { controller.current?.abort(); controller.current = null; flight.current = null; };
 	}, [active, run]);
+	useAutoRefresh(() => run(false), 60_000, !!config && active, config);
 	const refresh = useCallback(() => run(true), [run]);
 	const state = fetching ? 'loading' : error ? (value?.data.length ? 'partial' : 'error') : value ? 'ready' : 'idle';
 	return { data: value?.data || [], meta: value?.meta || null, state, fetching, error, refresh } as const;

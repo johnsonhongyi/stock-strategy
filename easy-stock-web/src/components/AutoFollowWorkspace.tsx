@@ -1,3 +1,4 @@
+import { useAutoRefresh } from '../lib/use-auto-refresh';
 import {FollowAIWorkspace} from './FollowAIWorkspace';
 import {FollowResearchPanel} from './FollowResearchPanel';
 import {useCallback,useEffect,useMemo,useState} from 'react';
@@ -12,12 +13,14 @@ const stateLabel:Record<string,string>={waiting:'待确认',held:'已跟踪',blo
 const actionLabel:Record<string,string>={BUY:'模拟买入',SELL:'模拟卖出',SKIP:'跳过',BLOCK:'门禁拦截',DATA_ERROR:'行情异常',CYCLE_ERROR:'扫描异常',MARKET_GATE:'市场检查',CONTROL:'控制回执',AI_DECISION:'AI决策门',AI_ERROR:'AI联动降级',SKIP_SELL:'暂不能模拟卖出'};
 const commandLabel:Record<string,string>={pause:'暂停开仓',resume:'恢复开仓',kill:'紧急停止开仓',release_kill:'解除风控停止',scan:'手动扫描',settings:'更新跟随范围',ai_settings:'更新AI协同设置',ai_ask:'提交AI研究问题'};
 
+
 export function AutoFollowWorkspace({config,refreshKey,onOpenStock,initialData=null}:{config:BackendConfig|null;refreshKey:number;onOpenStock?:(symbol:string)=>void;initialData?:FollowData|null}){
  const [data,setData]=useState<FollowData|null>(initialData),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [posting,setPosting]=useState(false),[tab,setTab]=useState('overview'),[query,setQuery]=useState(''),[route,setRoute]=useState('all');
  const [draft,setDraft]=useState<FollowSettings|null>(null),[decision,setDecision]=useState('all');
- const load=useCallback(async(signal?:AbortSignal)=>{if(!config)return;try{const r=await requestJSON<{data:FollowData}>(config,'/api/v1/auto-follow',{signal});setData(r.data);setError('')}catch(e){if(!signal?.aborted)setError(e instanceof Error?e.message:'读取跟单状态失败')}},[config]);
- useEffect(()=>{const abort=new AbortController();void load(abort.signal);const timer=setInterval(()=>{if(!document.hidden)void load(abort.signal)},5000);return()=>{abort.abort();clearInterval(timer)}},[load,refreshKey]);
+ const load=useCallback(async(signal?:AbortSignal)=>{if(!config)return;try{const r=await requestJSON<{data:FollowData}>(config,'/api/v1/auto-follow',{signal});if(!signal?.aborted){setData(r.data);setError('')}}catch(e){if(!signal?.aborted)setError(e instanceof Error?e.message:'读取跟单状态失败')}},[config]);
+ useEffect(()=>{const abort=new AbortController();void load(abort.signal);return()=>{abort.abort()}},[load,refreshKey]);
+ useAutoRefresh(load,5000,!!config,config);
  const submit=async(action:string,settings?:FollowSettings)=>{if(!config||posting)return;setPosting(true);setNotice('');try{const r=await requestJSON<{data:{id:string;status:string;message:string}}>(config,'/api/v1/auto-follow/commands',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:followCommandID(),action,...(settings?{settings}:{})})});setNotice(`${commandLabel[action]}已入队，等待后台回执；成交仍须通过交易时段及风控。`);if(settings)setDraft(null);await load()}catch(e){setNotice(e instanceof Error?e.message:'指令提交失败')}finally{setPosting(false)}};
  const state=data?.state,metrics=accountMetrics(data),settings=draft||state?.settings||defaultFollowSettings;
  const pending=data?.commands.some(c=>c.status==='pending')||false;

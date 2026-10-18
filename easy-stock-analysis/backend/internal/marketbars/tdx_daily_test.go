@@ -50,6 +50,8 @@ func TestReadDailyLoadsBenchmarkIndexesFromSharedTDXFiles(t *testing.T) {
 		{"399001.SZ", "399001"},
 		{"399006.SZ", "399006"},
 		{"000001.SH", "000001"},
+        {"sh000001", "000001"},
+        {"sz399006", "399006"},
 	} {
 		lines, found, err := store.ReadDaily(context.Background(), sample.symbol, "CN", 10)
 		if err != nil {

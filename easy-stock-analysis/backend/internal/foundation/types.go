@@ -63,6 +63,7 @@ type SourceHealth struct {
 	Name      string    `json:"name"`
 	Category  string    `json:"category"`
 	OK        bool      `json:"ok"`
+	Status    string    `json:"status,omitempty"`
 	Message   string    `json:"message,omitempty"`
 	CheckedAt time.Time `json:"checked_at"`
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useAutoRefresh } from './use-auto-refresh';
 import { BackendConfig, BackendRequestError, SectorMap, ThemeOverview, ThemeScreenData, ThemeScreenLane, ThemeScreenSort, requestJSON } from './backend';
 
 export type ThemeFilter = { page: number; node: string; lane: ThemeScreenLane; sort: ThemeScreenSort; query: string };
@@ -23,6 +24,8 @@ export function useThemeConstituents(config: BackendConfig | null, active: boole
 	const cache = useRef(new Map<string, ThemeScreenData>());
 	const recoveries = useRef(new Set<string>());
 	const recoveryEpoch = useRef(refreshKey);
+	const [autoRevision, setAutoRevision] = useState(0);
+	useAutoRefresh(() => setAutoRevision(value => value + 1), 60_000, !!config && active, config);
 	const input = useRef({ theme, filter, recover }); input.current = { theme, filter, recover };
 	useEffect(() => {
 		if (!config || !active || !input.current.theme) return;
@@ -80,7 +83,7 @@ export function useThemeConstituents(config: BackendConfig | null, active: boole
 		const timeout = setTimeout(() => { abort.abort(); setState(current => current.key === requestKey ? { ...current, fetching: false, error: '成分加载超时，请重试' } : current); }, 50_000);
 		void run(selected, false).finally(() => clearTimeout(timeout));
 		return () => { clearTimeout(timeout); abort.abort(); };
-	}, [config, active, requestKey, refreshKey]);
+	}, [config, active, requestKey, refreshKey, autoRevision]);
 	const current = state.key === requestKey ? state : { key: requestKey, data: cache.current.get(requestKey) || (theme ? leaderPreview(theme, filter) : null), fetching: active && Boolean(theme), error: '' };
 	const status = current.fetching ? 'loading' : current.error ? (current.data ? 'partial' : 'error') : current.data ? 'ready' : 'idle';
 	return { ...current, status } as const;

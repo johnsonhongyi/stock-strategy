@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BackendConfig, LimitUpLadderData, MarketEmotionHistory } from './backend';
+import { useAutoRefresh } from './use-auto-refresh';
 import { pollShortTermProgress, ShortTermProgress } from './short-term-progress';
 import { logRuntimeEvent } from './runtime-log';
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error';
-function useShortTermResource<T>(config: BackendConfig | null, active: boolean, refreshKey: number, path: string, budgetMS: number) {
+function useShortTermResource<T>(config: BackendConfig | null, active: boolean, refreshKey: number, path: string, budgetMS: number, autoRevision: number) {
 	const [data, setData] = useState<T | null>(null);
 	const [progress, setProgress] = useState<ShortTermProgress<T> | null>(null);
 	const [state, setState] = useState<LoadState>('idle');
@@ -44,7 +45,7 @@ function useShortTermResource<T>(config: BackendConfig | null, active: boolean, 
 			setError(error instanceof Error ? error.message : '数据加载失败');
 		});
 		return () => { disposed = true; abort.abort(); };
-	}, [config, active, refreshKey, path, budgetMS]);
+	}, [config, active, refreshKey, path, budgetMS, autoRevision]);
 	// Hide the old backend's data even before the reset effect runs.
 	const currentConfig = previousConfig.current === config;
 	return { data: currentConfig ? data : null, progress: currentConfig ? progress : null, state, error };
@@ -52,8 +53,10 @@ function useShortTermResource<T>(config: BackendConfig | null, active: boolean, 
 
 export function useLimitUpWorkspace(config: BackendConfig | null, active: boolean) {
 	const [refreshKey, setRefreshKey] = useState(0);
+	const [autoRevision, setAutoRevision] = useState(0);
 	const refresh = useCallback(() => setRefreshKey(key => key + 1), []);
-	const ladder = useShortTermResource<LimitUpLadderData>(config, active, refreshKey, '/api/v1/short-term/limit-up-ladder', 35_000);
-	const history = useShortTermResource<MarketEmotionHistory>(config, active, refreshKey, '/api/v1/short-term/emotion-history', 160_000);
+	const ladder = useShortTermResource<LimitUpLadderData>(config, active, refreshKey, '/api/v1/short-term/limit-up-ladder', 35_000, autoRevision);
+	const history = useShortTermResource<MarketEmotionHistory>(config, active, refreshKey, '/api/v1/short-term/emotion-history', 160_000, autoRevision);
+	useAutoRefresh(() => { if (ladder.state !== 'loading' && history.state !== 'loading') setAutoRevision(value => value + 1); }, 60_000, !!config && active, config);
 	return { ladder, history, refresh };
 }

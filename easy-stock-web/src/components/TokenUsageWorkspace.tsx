@@ -1,11 +1,13 @@
+import { useAutoRefresh } from '../lib/use-auto-refresh';
 import { BarChart3, CalendarDays, Database, LoaderCircle, RefreshCw, Sigma } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BackendConfig, TokenUsageSummary, requestJSON } from '../lib/backend';
 
 type UsagePeriod = 'day' | 'month';
 
 const moduleLabels: Record<string, string> = {
 	'ai-chat': 'AI 对话',
+	'settings-bridge-test': '桌面桥检测',
 	'stock-analysis': '个股分析',
 	'portfolio-inspection': '持仓 AI 巡检',
 	'review-diary': '大V复盘日记',
@@ -39,6 +41,7 @@ function formatNumber(value: number) {
 	return value.toLocaleString('zh-CN');
 }
 
+
 export function TokenUsageWorkspace({ config, refreshKey }: { config: BackendConfig | null; refreshKey: number }) {
 	const today = useMemo(() => new Date(), []);
 	const [period, setPeriod] = useState<UsagePeriod>('day');
@@ -49,23 +52,26 @@ export function TokenUsageWorkspace({ config, refreshKey }: { config: BackendCon
 	const [usage, setUsage] = useState<TokenUsageSummary | null>(null);
 	const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle');
 
-	const loadUsage = async () => {
+	const loadUsage = useCallback(async (signal?: AbortSignal, background = false) => {
 		if (!config) return;
-		setState('loading');
+		if (!background) setState('loading');
 		const params = new URLSearchParams({ period, from, to });
 		if (module) params.set('module', module);
 		if (model) params.set('model', model);
 		try {
-			const payload = await requestJSON<{ data: TokenUsageSummary }>(config, `/api/v1/settings/token-usage?${params.toString()}`);
+			const payload = await requestJSON<{ data: TokenUsageSummary }>(config, `/api/v1/settings/token-usage?${params.toString()}`, { signal });
+			if (signal?.aborted) return;
 			setUsage(payload.data);
 			setState('idle');
 		} catch {
-			setUsage(null);
+			if (signal?.aborted) return;
+			if (!background) setUsage(null);
 			setState('error');
 		}
-	};
+	}, [config, period, from, to, module, model]);
 
-	useEffect(() => { void loadUsage(); }, [config, refreshKey]);
+	useEffect(() => { const controller = new AbortController(); void loadUsage(controller.signal); return () => controller.abort(); }, [loadUsage, refreshKey]);
+	useAutoRefresh(signal => loadUsage(signal, true), 30_000, !!config, loadUsage);
 
 	const modules = useMemo(() => [...new Set([...defaultModules, ...(usage?.modules || [])])], [usage?.modules]);
 	const models = useMemo(() => (usage?.models || []).filter((item) => item !== '').sort((a, b) => a.localeCompare(b)), [usage?.models]);

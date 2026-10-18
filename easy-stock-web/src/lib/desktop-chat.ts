@@ -4,7 +4,7 @@ import {bridgeTargetLabel} from './linkage-display';
 import {streamTaskSnapshots} from './task-events';
 
 export type ChatRuntimeConfig={provider:'hermes'|'codex_desktop';node_id:string;workspace_id:string;model:string;reasoning_effort:string};
-export type DesktopChatCapability='ai_chat_v1'|'stock_research_v1';
+export type DesktopChatCapability='ai_chat_v1'|'stock_research_v1'|'strategy_research';
 export type ChatRuntime={config:ChatRuntimeConfig;online:boolean;models:Array<{id:string;name:string;efforts:string[]}>;message:string};
 export type AvailableDesktopChatTarget={node_id:string;workspace_id:string;label:string;runtime:ChatRuntime};
 export async function loadChatRuntime(config:BackendConfig,node_id='',workspace_id='',capability:DesktopChatCapability='ai_chat_v1'){

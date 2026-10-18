@@ -165,6 +165,8 @@ func NewService(databasePath, targetsPath string) (*Service, error) {
 		);
 		CREATE INDEX IF NOT EXISTS idx_linkage_context_snapshots_created
 			ON linkage_context_snapshots(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_linkage_context_workspace_created
+            ON linkage_context_snapshots(CASE WHEN json_valid(CAST(payload AS TEXT)) THEN json_extract(CAST(payload AS TEXT),'$.workspace_id') END,created_at DESC,snapshot_id DESC);
 		CREATE TABLE IF NOT EXISTS linkage_context_events (
 			event_id TEXT PRIMARY KEY,
 			event_type TEXT NOT NULL,
@@ -190,6 +192,8 @@ func NewService(databasePath, targetsPath string) (*Service, error) {
 		);
 		CREATE INDEX IF NOT EXISTS idx_linkage_context_evidence_latest
 			ON linkage_context_evidence(source_id,trade_date,as_of,received_at);
+        CREATE INDEX IF NOT EXISTS idx_linkage_context_evidence_workspace_latest
+            ON linkage_context_evidence(workspace_id,node_id,source_id,trade_date DESC,as_of DESC,received_at DESC);
 		CREATE TABLE IF NOT EXISTS linkage_attention_revisions (
 			workspace_id TEXT NOT NULL,
 			node_id TEXT NOT NULL,
@@ -906,7 +910,7 @@ func (s *Service) LatestContextSnapshotForWorkspace(ctx context.Context, workspa
 	var payload []byte
 	err := s.db.QueryRowContext(ctx,
 		`SELECT payload FROM linkage_context_snapshots
-		 WHERE json_extract(CAST(payload AS TEXT),'$.workspace_id')=?
+		 WHERE CASE WHEN json_valid(CAST(payload AS TEXT)) THEN json_extract(CAST(payload AS TEXT),'$.workspace_id') END=?
 		 ORDER BY created_at DESC,snapshot_id DESC LIMIT 1`, workspaceID,
 	).Scan(&payload)
 	return payload, err
@@ -1084,13 +1088,12 @@ func (s *Service) StoreContextSnapshot(ctx context.Context, snapshotID, tradeDat
 		`DELETE FROM linkage_context_snapshots
 		WHERE (created_at < ? OR snapshot_id NOT IN (
 			SELECT snapshot_id FROM linkage_context_snapshots ORDER BY created_at DESC,snapshot_id DESC LIMIT 1000
-		)) AND NOT EXISTS (
-			SELECT 1 FROM linkage_context_events AS event
-			WHERE event.causation_id=linkage_context_snapshots.snapshot_id OR EXISTS (
-				SELECT 1 FROM json_each(event.source_snapshot_ids) AS reference
-				WHERE reference.value=linkage_context_snapshots.snapshot_id
-			)
-		)`, time.Now().UTC().Add(-30*24*time.Hour).Format(time.RFC3339Nano),
+		)) AND snapshot_id NOT IN (
+            SELECT causation_id FROM linkage_context_events
+            UNION
+            SELECT CAST(reference.value AS TEXT) FROM linkage_context_events AS event,
+                json_each(event.source_snapshot_ids) AS reference WHERE reference.type='text'
+        )`, time.Now().UTC().Add(-30*24*time.Hour).Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return err

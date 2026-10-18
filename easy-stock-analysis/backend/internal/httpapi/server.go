@@ -52,6 +52,7 @@ type Server struct {
 	linkageContextMu      sync.Mutex
 	tdx                   *tdx.Client
 	marketNetwork         *marketnetwork.Config
+	sourceHealth          *sourceHealthMonitor
 	ladderThemeAI         *ladderThemeAI
 	mux                   *http.ServeMux
 	token                 string
@@ -122,6 +123,8 @@ func NewServer(config any) *Server {
 		cfg.Logger = log.Default()
 	}
 	var startupErrors []error
+	sourceHealth := newSourceHealthMonitor(cfg.MarketCacheTransport)
+	cfg.MarketCacheTransport = sourceHealth
 	sinaClient := sina.NewClient(sina.WithHTTPClient(newMarketHTTPClient(10*time.Second, cfg.MarketCacheTransport)))
 	eastMoneyClient := eastmoney.NewClient(eastmoney.WithHTTPClient(newMarketHTTPClient(15*time.Second, cfg.MarketCacheTransport)))
 	tencentClient := tencent.NewClient(tencent.WithHTTPClient(newMarketHTTPClient(12*time.Second, cfg.MarketCacheTransport)))
@@ -355,6 +358,7 @@ func NewServer(config any) *Server {
 	s := &Server{
 		mux:                   http.NewServeMux(),
 		marketNetwork:         cfg.MarketNetwork,
+		sourceHealth:          sourceHealth,
 		token:                 cfg.Token,
 		realtimeProvider:      cfg.Realtime,
 		kLinePrimary:          cfg.KLinePrimary,
@@ -742,17 +746,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sources(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"sources": []foundation.SourceHealth{
-			{ID: "duanxianxia", Name: "短线侠 / 开盘啦", Category: "theme,leaders,limit-up,concept", OK: true, CheckedAt: time.Now()},
-			{ID: "eastmoney", Name: "东方财富", Category: "quote,kline,f10,report", OK: true, CheckedAt: time.Now()},
-			{ID: "sina", Name: "新浪财经", Category: "quote,kline,money-flow", OK: true, CheckedAt: time.Now()},
-			{ID: "tencent", Name: "腾讯财经", Category: "quote,index,hk", OK: true, CheckedAt: time.Now()},
-			{ID: "cls", Name: "财联社", Category: "news,calendar", OK: true, CheckedAt: time.Now()},
-			{ID: "tradingview", Name: "TradingView", Category: "news", OK: true, CheckedAt: time.Now()},
-			{ID: "tushare", Name: "Tushare", Category: "basic,daily,index", OK: false, Message: "requires token", CheckedAt: time.Now()},
-		},
-	})
+	monitor := s.sourceHealth
+	if monitor == nil {
+		monitor = newSourceHealthMonitor(nil)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sources": monitor.snapshot(time.Now())})
 }
 
 func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {

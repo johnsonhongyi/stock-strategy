@@ -114,16 +114,23 @@ func (s *Server) autoFollowStatus(w http.ResponseWriter, r *http.Request) {
 		if e == nil {
 			defer rows.Close()
 			commands := []map[string]any{}
+			settingsSeen := false
 			for rows.Next() {
 				var id, action, created, status string
 				var applied, message sql.NullString
 				if rows.Scan(&id, &action, &created, &status, &applied, &message) != nil {
 					break
 				}
+				if action == "ai_settings" && !settingsSeen {
+					result["bridge_notice"] = automaticBridgeNotice(id, action, status)
+					settingsSeen = true
+				}
 				commands = append(commands, map[string]any{"id": id, "action": action, "created_at": created, "status": status, "applied_at": applied.String, "result": message.String})
 			}
 			result["commands"] = commands
+			rows.Close()
 		}
+		overlayStrategyBridgeState(r.Context(), control, state)
 	}
 	writeJSON(w, 200, map[string]any{"data": result})
 }

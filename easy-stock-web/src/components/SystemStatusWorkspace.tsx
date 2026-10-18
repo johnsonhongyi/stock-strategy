@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { BackendConfig, requestJSON } from '../lib/backend';
 import { importLinkageSetup, parseLinkageSetupPackage, type LinkageSetupPackage, type LinkageSetupResult } from '../lib/linkage';
 import './system-status.css';
+import { startAutoRefresh } from '../lib/use-auto-refresh';
 import { TypographySettings } from './TypographySettings';
 import { MarketNetworkSettings } from './MarketNetworkSettings';
 
@@ -213,11 +214,11 @@ export function SystemStatusWorkspace({ config, refreshKey }: { config: BackendC
 			return () => { active = false; controller.abort(); };
 		}
 		void load();
-		const timer = window.setInterval(() => { void load(); }, 60_000);
+		const stopRefresh = startAutoRefresh(() => load(), 60_000);
 		return () => {
 			active = false;
 			controller.abort();
-			window.clearInterval(timer);
+			stopRefresh();
 		};
 	}, [config, refreshKey, manualRefreshKey]);
 

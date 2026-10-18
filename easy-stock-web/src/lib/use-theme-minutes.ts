@@ -1,25 +1,22 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BackendConfig, KLine, requestJSON } from './backend';
+import { useAutoRefresh } from './use-auto-refresh';
 
 // Bounded current-page sample. All persistence is owned by the external Go cache.
 export function useThemeMinutes(config: BackendConfig | null, active: boolean, symbols: string[], selected: string, refreshKey: number) {
  const key = [...new Set([selected, ...symbols].filter(Boolean))].slice(0, 16).sort().join(',');
  const [snapshot, setSnapshot] = useState<{ key: string; config: BackendConfig; data: Record<string, KLine[]> }>();
- useEffect(() => {
+ const load = useCallback(async (signal: AbortSignal) => {
   if (!config || !active || !key) return;
-  let controller = new AbortController();let stopped = false;let timer: ReturnType<typeof setTimeout>;
-  async function load() {
-   if(stopped)return;
-   controller=new AbortController();
-   const timeout=setTimeout(()=>controller.abort(),40_000);
-   try {
-    const result = await requestJSON<{data: Record<string, KLine[]>}>(config!, `/api/v1/quotes/kline/batch?symbols=${encodeURIComponent(key)}&period=1&limit=240`, {signal: controller.signal});
-    if (!stopped) setSnapshot({key, config: config!, data: result.data});
-   } catch { if (!stopped) setSnapshot(undefined); }
-   clearTimeout(timeout);
-   if (!stopped) timer = setTimeout(load, 60_000);
+  try {
+   const result = await requestJSON<{ data: Record<string, KLine[]> }>(config, `/api/v1/quotes/kline/batch?symbols=${encodeURIComponent(key)}&period=1&limit=240`, { signal });
+   if (!signal.aborted) setSnapshot({ key, config, data: result.data });
+  } catch {
+   if (signal.aborted) return;
+   setSnapshot(current => current?.key === key && current.config === config ? { ...current, data: Object.fromEntries(Object.entries(current.data).map(([symbol, lines]) => [symbol, lines.map(line => ({ ...line, meta: { ...line.meta, stale: true, fallback_reason: '分时更新失败，保留上次快照' } }))])) } : undefined);
   }
-  void load();return () => { stopped = true;controller.abort();clearTimeout(timer); };
- }, [config, active, key, refreshKey]);
+ }, [config, active, key]);
+ useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, [load, refreshKey]);
+ useAutoRefresh(load, 60_000, !!config && active && !!key, load);
  return active && snapshot?.key === key && snapshot.config === config ? snapshot.data : {};
 }

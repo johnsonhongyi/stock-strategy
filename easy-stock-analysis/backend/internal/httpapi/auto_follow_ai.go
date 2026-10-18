@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"easy-stock/backend/internal/runtimelog"
 )
 
 // The linkage middleware verifies HMAC before this identity-scoped queue route.
@@ -104,6 +106,9 @@ func (s *Server) autoFollowAIPeer(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeError(w, 503, "desktop heartbeat unavailable")
 			return
+		}
+		if err := s.reconcileStrategyBridge(r.Context(), db); err != nil && s.logger != nil {
+			s.logger.Printf("level=warn event=strategy_bridge_reconcile error=%q", runtimelog.Redact(err.Error()))
 		}
 		writeJSON(w, 200, map[string]any{"status": "stored"})
 	case "claim":

@@ -247,6 +247,7 @@ export type SourceHealth = {
   name: string;
   category: string;
   ok: boolean;
+  status?: string;
   message?: string;
   checked_at: string;
 };
@@ -1958,6 +1959,20 @@ export class BackendRequestError extends Error {
 }
 
 export async function requestJSON<T>(config: BackendConfig, path: string, init: RequestInit = {}): Promise<T> {
+ if ((init.method || 'GET').toUpperCase() !== 'GET') return requestJSONWithSignal<T>(config, path, init);
+ const controller = new AbortController();
+ const abort = () => controller.abort(init.signal?.reason);
+ if (init.signal?.aborted) abort(); else init.signal?.addEventListener('abort', abort, { once: true });
+ let timedOut = false;
+ const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 30_000);
+ try { return await requestJSONWithSignal<T>(config, path, { ...init, signal: controller.signal }); }
+ catch (error) {
+  if (timedOut && !init.signal?.aborted) throw new BackendRequestError('读取数据超过30秒，请求已结束；自动刷新会重试。', 0, 'read_timeout');
+  throw error;
+ } finally { clearTimeout(timer); init.signal?.removeEventListener('abort', abort); }
+}
+
+async function requestJSONWithSignal<T>(config: BackendConfig, path: string, init: RequestInit): Promise<T> {
 	const headers = new Headers(init.headers);
 	if (config.token) headers.set('Authorization', `Bearer ${config.token}`);
 	const requestID = createRuntimeRequestID();

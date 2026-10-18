@@ -35,6 +35,8 @@ type Props = {
 
 const directoryStorageKey = 'easy-stock.stock-directory.v1';
 
+import { startAutoRefresh, useAutoRefresh } from '../lib/use-auto-refresh';
+
 export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSettings, onOpenStockAnalysis }: Props) {
 	const [draft, setDraft] = useState(readPortfolioDraft);
 	const [directory, setDirectory] = useState<StockDirectoryEntry[]>(loadCachedDirectory);
@@ -48,21 +50,23 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 	const totalWeight = useMemo(() => draft.holdings.reduce((total, item) => total + item.weight, 0), [draft.holdings]);
 	const running = job?.status === 'running';
 
-	const loadWorkspace = useCallback(async () => {
+	const loadWorkspace = useCallback(async (signal?: AbortSignal, background = false) => {
 		if (!config) return;
-		setLoading(true);
+		if (!background) setLoading(true);
 		setError('');
 		try {
 			const [directoryPayload, jobsPayload] = await Promise.all([
-				requestJSON<{ data: StockDirectoryData }>(config, '/api/v1/stocks/directory'),
-				requestJSON<{ data: PortfolioInspectionJob[] }>(config, '/api/v1/portfolio-inspections?limit=12'),
+				requestJSON<{ data: StockDirectoryData }>(config, '/api/v1/stocks/directory', { signal }),
+				requestJSON<{ data: PortfolioInspectionJob[] }>(config, '/api/v1/portfolio-inspections?limit=12', { signal }),
 			]);
+			if (signal?.aborted) return;
 			setDirectory(directoryPayload.data.stocks || []);
 			cacheDirectory(directoryPayload.data.stocks || []);
 			setHistory(jobsPayload.data || []);
 			const active = jobsPayload.data?.find((item) => item.status === 'running');
-			if (active) setJob(active);
+			setJob(current => current ? jobsPayload.data?.find(item => item.id === current.id) || current : active || null);
 		} catch (cause) {
+			if (signal?.aborted) return;
 			setError(cause instanceof Error ? cause.message : '持仓巡检数据加载失败');
 		} finally {
 			setLoading(false);
@@ -70,8 +74,10 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 	}, [config]);
 
 	useEffect(() => {
-		void loadWorkspace();
+		const controller = new AbortController(); void loadWorkspace(controller.signal);
+		return () => controller.abort();
 	}, [loadWorkspace, refreshKey]);
+	useAutoRefresh(signal => loadWorkspace(signal, true), 30_000, !!config, config);
 
 	useEffect(() => {
 		writePortfolioDraft(draft);
@@ -92,9 +98,8 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 				// Reopening this workspace recovers the persisted task state.
 			}
 		};
-		void poll();
-		const timer = window.setInterval(() => void poll(), 3000);
-		return () => { active = false; window.clearInterval(timer); };
+		const stopRefresh = startAutoRefresh(() => poll(), 3000);
+		return () => { active = false; stopRefresh(); };
 	}, [config, job?.id, job?.status]);
 
 	const startInspection = async () => {

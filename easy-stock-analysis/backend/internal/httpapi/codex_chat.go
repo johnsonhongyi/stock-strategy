@@ -45,8 +45,12 @@ func (s *Server) chatDB() (*sql.DB, error) {
  CREATE TABLE IF NOT EXISTS desktop_chat_jobs(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,owner TEXT NOT NULL,node_id TEXT NOT NULL,workspace_id TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,lease_token TEXT NOT NULL DEFAULT '',lease_until INTEGER NOT NULL DEFAULT 0,result TEXT NOT NULL DEFAULT '{}');
  CREATE INDEX IF NOT EXISTS desktop_chat_claim ON desktop_chat_jobs(node_id,workspace_id,status,created_at);
  CREATE INDEX IF NOT EXISTS desktop_chat_session ON desktop_chat_jobs(session_id,status,expires_at);
- CREATE INDEX IF NOT EXISTS desktop_chat_expiry ON desktop_chat_jobs(expires_at);`)
+ CREATE INDEX IF NOT EXISTS desktop_chat_expiry ON desktop_chat_jobs(expires_at);` + desktopUsageSchema)
 	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	if _, err = db.Exec(desktopUsageInsert, nil); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -128,7 +132,7 @@ func (s *Server) desktopChatRuntime(w http.ResponseWriter, r *http.Request) {
 	if capability == "" {
 		capability = "ai_chat_v1"
 	}
-	if capability != "ai_chat_v1" && capability != "stock_research_v1" {
+	if capability != "ai_chat_v1" && capability != "stock_research_v1" && capability != "strategy_research" {
 		writeError(w, 400, "不支持的桌面桥能力")
 		return
 	}
@@ -172,6 +176,10 @@ func (s *Server) desktopChatRuntime(w http.ResponseWriter, r *http.Request) {
 	if capability == "stock_research_v1" {
 		catalog = desktopStockResearchCatalog
 		scope = "stock-research"
+	}
+	if capability == "strategy_research" {
+		catalog = desktopStrategyCatalog
+		scope = "strategy-research"
 	}
 	models, online := catalog(db, catalogConfig)
 	writeJSON(w, 200, map[string]any{"data": map[string]any{"config": c, "models": models, "online": online, "capability": capability, "credential_mode": "desktop_login", "scope": scope, "message": "Codex登录凭据仅保留在桌面；Hermes技能与MCP配置不自动转交"}})
@@ -494,6 +502,11 @@ func desktopChatPeer(db *sql.DB, operation, node, workspace, id, token, status s
 			return nil, desktopPeerFailure{"CHAT_CANCELLED", 409}
 		}
 		return nil, desktopPeerFailure{"CHAT_LEASE_INACTIVE", 409}
+	}
+	if status == "completed" || status == "failed" {
+		if err := recordDesktopUsage(tx, id, now); err != nil {
+			return nil, err
+		}
 	}
 	if payload.Thread != "" {
 		_, err = tx.Exec("UPDATE desktop_chat_sessions SET thread_id=? WHERE id=(SELECT session_id FROM desktop_chat_jobs WHERE id=?)", payload.Thread, id)

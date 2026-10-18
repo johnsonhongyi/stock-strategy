@@ -74,6 +74,17 @@ func (p *RadarProvider) fusedOverviews(
 	return items, meta, nil
 }
 
+func industryObservationDate(now time.Time) string {
+	if active, err := tradingcalendar.IsTradingSession("CN", now); err == nil && active {
+		return shanghaiDate(now)
+	}
+	date, err := tradingcalendar.LatestCompletedDate("CN", now)
+	if err != nil {
+		return ""
+	}
+	return date
+}
+
 func buildIndustryRadarOverviews(items []foundation.MarketIndustryMomentum, meta foundation.SourceMeta, now time.Time) []foundation.ThemeOverview {
 	if len(items) == 0 {
 		return nil
@@ -113,7 +124,7 @@ func buildIndustryRadarOverviews(items []foundation.MarketIndustryMomentum, meta
 		)
 		dailyScore := blendProviderAndComposite(item.Score, dailyComposite, dailyOK)
 		fiveDayScore := blendProviderAndComposite(item.Score, fiveDayComposite, fiveDayOK)
-		tradeDate := firstNonEmptyRadar(item.Meta.TradeDate, meta.TradeDate, shanghaiDate(now))
+		tradeDate := firstNonEmptyRadar(item.Meta.TradeDate, meta.TradeDate, industryObservationDate(now))
 		matched := item.RisingCount + item.FallingCount
 		result = append(result, foundation.ThemeOverview{
 			Theme:                radarIndustryThemeID(item.Code, item.Name),

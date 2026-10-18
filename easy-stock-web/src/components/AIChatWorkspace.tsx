@@ -1,5 +1,6 @@
 import {prepareDesktopChatRuntime,loadChatRuntime,saveChatRuntime,streamDesktopChat,type ChatRuntime} from '../lib/desktop-chat';
 import {shortBridgeIdentity} from '../lib/linkage-display';
+import {useAutoRefresh} from '../lib/use-auto-refresh';
 import { ReasoningControl } from './ReasoningControl';
 import {
 	Bot,
@@ -274,11 +275,7 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 		}
 	}, [config, desktopRuntime, modelSwitchState, sending]);
 
-	useEffect(() => {
-		if (!config || desktopRuntime?.config.provider !== 'codex_desktop' || sending || modelSwitchState === 'switching') return;
-		const timer = window.setInterval(() => void pollDesktopBridge(), 30000);
-		return () => window.clearInterval(timer);
-	}, [config, desktopRuntime?.config.provider, modelSwitchState, pollDesktopBridge, sending]);
+	useAutoRefresh(pollDesktopBridge, 30_000, !!config && desktopRuntime?.config.provider === 'codex_desktop' && !sending && modelSwitchState !== 'switching', config);
 
 	useEffect(()=>{const changed=()=>{void loadModel();};window.addEventListener('ai-runtime-changed',changed);return()=>window.removeEventListener('ai-runtime-changed',changed);},[loadModel]);
 

@@ -4,6 +4,7 @@ import { BackendConfig, KLine, Quote, requestJSON } from '../lib/backend';
 import type { StockDirectoryData, StockDirectoryEntry } from '../lib/backend';
 import { KLineChart } from './KLineChart';
 import './stock-data.css';
+import { useAutoRefresh } from '../lib/use-auto-refresh';
 
 type Market = 'CN' | 'US' | 'CRYPTO';
 type MarketFilter = 'ALL' | Market;
@@ -115,22 +116,25 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 	const [notice, setNotice] = useState('');
 	const [dataVersion, setDataVersion] = useState(0);
 
-	const reload = useCallback(async () => {
+	const reload = useCallback(async (signal?: AbortSignal, background = false) => {
 		if (!config) return;
-		setLoading(true);
+		if (!background) setLoading(true);
 		setError('');
 		try {
-			const payload = await requestJSON<{ data: StockDataRow[] }>(config, '/api/v1/market-data/stocks');
+			const payload = await requestJSON<{ data: StockDataRow[] }>(config, '/api/v1/market-data/stocks', { signal });
+			if (signal?.aborted) return;
 			setStocks(payload.data || []);
 			setDataVersion((value) => value + 1);
 		} catch (loadError) {
+			if (signal?.aborted) return;
 			setError(loadError instanceof Error ? loadError.message : '读取行情库失败');
 		} finally {
 			setLoading(false);
 		}
 	}, [config]);
 
-	useEffect(() => { void reload(); }, [reload, refreshKey]);
+	useEffect(() => { const controller = new AbortController(); void reload(controller.signal); return () => controller.abort(); }, [reload, refreshKey]);
+	useAutoRefresh(signal => reload(signal, true), 60_000, !!config, reload);
 
 	useEffect(() => {
 		if (!config || !stocks.some((stock) => stock.market === 'CN' && (!stock.name.trim() || stock.name.trim().toUpperCase() === stock.symbol.toUpperCase()))) return;
@@ -209,10 +213,8 @@ export function StockDataWorkspace({ config, refreshKey, onOpenAnalysis, onOpenS
 		if (!config) return;
 		let cancelled = false;
 		const selectedKeyForRequest = keyOf(selected);
-		setBars([]);
-		setBarsKey('');
-		setQuote(null);
-		setQuoteKey('');
+		if (barsKey !== selectedKeyForRequest) { setBars([]); setBarsKey(''); }
+		if (quoteKey !== selectedKeyForRequest) { setQuote(null); setQuoteKey(''); }
 		setBarsLoading(true);
 		setBarsError('');
 		void requestJSON<{ data: KLine[] }>(config, `/api/v1/quotes/kline?symbol=${encodeURIComponent(selected.symbol)}&market=${selected.market}&period=day&limit=60`)

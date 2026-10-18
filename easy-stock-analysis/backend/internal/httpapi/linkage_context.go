@@ -171,7 +171,7 @@ func (s *Server) linkageContextHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "linkage workspace is not configured")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 18*time.Second)
 	defer cancel()
 	results := make(chan linkageContextResult, 3)
 	go func() {
@@ -202,7 +202,7 @@ func (s *Server) linkageContextHandler(w http.ResponseWriter, r *http.Request) {
 	var themeMeta foundation.SourceMeta
 	var heat hotStockRankData
 	var ladder limitUpLadderData
-	var themeErr, heatErr, ladderErr error
+	themeErr, heatErr, ladderErr := errors.New("theme fetch incomplete"), errors.New("hot ranks fetch incomplete"), errors.New("ladder fetch incomplete")
 	for received := 0; received < 3; received++ {
 		select {
 		case result := <-results:
@@ -232,10 +232,12 @@ func (s *Server) linkageContextHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	databaseContext, cancelDatabase := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancelDatabase()
 	now := time.Now().UTC()
 	snapshot := buildLinkageContextSnapshot(now, themes, themeMeta, themeErr, heat, heatErr, ladder, ladderErr)
 	snapshot.WorkspaceID = workspaceID
-	evidence, evidenceErr := s.linkage.RecentContextEvidenceForWorkspace(r.Context(), workspaceID)
+	evidence, evidenceErr := s.linkage.RecentContextEvidenceForWorkspace(databaseContext, workspaceID)
 	if evidenceErr != nil {
 		snapshot.Errors = append(snapshot.Errors, "context_evidence: unavailable")
 		if snapshot.Freshness == "fresh" {
@@ -244,9 +246,13 @@ func (s *Server) linkageContextHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		snapshot = mergeLinkageContextEvidence(snapshot, evidence)
 	}
-	s.linkageContextMu.Lock()
+	if !s.linkageContextMu.TryLock() {
+		w.Header().Set("Retry-After", "2")
+		writeError(w, http.StatusServiceUnavailable, "linkage context is updating; retry shortly")
+		return
+	}
 	defer s.linkageContextMu.Unlock()
-	previous, previousErr := s.linkage.LatestContextSnapshotForWorkspace(r.Context(), workspaceID)
+	previous, previousErr := s.linkage.LatestContextSnapshotForWorkspace(databaseContext, workspaceID)
 	if previousErr != nil && !errors.Is(previousErr, sql.ErrNoRows) {
 		writeError(w, http.StatusServiceUnavailable, "could not load previous linkage context")
 		return
@@ -257,7 +263,7 @@ func (s *Server) linkageContextHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not encode linkage context")
 		return
 	}
-	if err := s.linkage.StoreContextSnapshot(r.Context(), snapshot.SnapshotID, snapshot.TradeDate, encoded, events); err != nil {
+	if err := s.linkage.StoreContextSnapshot(databaseContext, snapshot.SnapshotID, snapshot.TradeDate, encoded, events); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "could not persist linkage context")
 		return
 	}

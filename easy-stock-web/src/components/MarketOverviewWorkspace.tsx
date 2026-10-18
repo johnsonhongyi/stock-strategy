@@ -19,6 +19,7 @@ import {
 	Sparkles,
 	TrendingUp,
 } from 'lucide-react';
+import { useAutoRefresh } from '../lib/use-auto-refresh';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
@@ -119,13 +120,13 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 	const [aiPreparing, setAIPreparing] = useState(false);
 	const activeModule = useMemo(() => findMarketOverviewModule(activeView), [activeView]);
 
-	const loadPulse = useCallback(async (signal?: AbortSignal) => {
+	const loadPulse = useCallback(async (signal?: AbortSignal, background = false) => {
 		if (!config) {
 			setPulseState('error');
 			setPulseError('后端尚未连接');
 			return;
 		}
-		setPulseState('loading');
+		if (!background) setPulseState('loading');
 		setPulseError('');
 		const [newsResult, themeResult, sourceResult] = await Promise.allSettled([
 			requestJSON<{ data: NewsItem[] }>(config, '/api/v1/market/news?source=cls&limit=30', { signal }),
@@ -154,9 +155,9 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 		setPulseState(successes > 0 ? 'ready' : 'error');
 	}, [config]);
 
-	const loadModule = useCallback(async (signal?: AbortSignal) => {
+	const loadModule = useCallback(async (signal?: AbortSignal, background = false) => {
 		if (!config || activeView === 'pulse') return;
-		setModuleState('loading');
+		if (!background) setModuleState('loading');
 		setModuleError('');
 		try {
 			if (activeView === 'core-indexes') {
@@ -178,7 +179,7 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 				setMargins(payload.data);
 				setModuleMeta(payload.meta);
 			} else if (activeView === 'futures-position') {
-				setFuturesMembers(null);
+				if (!background) setFuturesMembers(null);
 				const [consensusPayload, payload] = await Promise.all([
 					requestJSON<{ data: MarketFuturesConsensus }>(config, '/api/v1/market/futures-consensus', { signal }).catch(() => null),
 					requestJSON<{ data: MarketFuturesPositionSeries; meta: SourceMeta }>(config, `/api/v1/market/futures-position?variety=${futuresVariety}&limit=60`, { signal }),
@@ -197,7 +198,7 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 				const query = tradeDate ? `&trade_date=${encodeURIComponent(tradeDate)}` : '';
 				const payload = await requestJSON<{ data: MarketBillboardItem[]; meta: SourceMeta }>(config, `/api/v1/market/billboard?limit=100${query}`, { signal });
 				setBillboard(payload.data);
-				setBillboardDetails({});
+				if (!background) setBillboardDetails({});
 				setModuleMeta(payload.meta);
 			} else {
 				const params = new URLSearchParams({ limit: '80' });
@@ -219,6 +220,8 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 			setModuleState('error');
 		}
 	}, [activeModule.name, activeView, announcementCategory, config, futuresVariety, marginLimit, submittedQuery, tradeDate]);
+
+	useAutoRefresh(signal => activeView === 'pulse' ? loadPulse(signal, true) : loadModule(signal, true), 30_000, !!config, loadModule);
 
 	const requestBillboardDetail = useCallback(async (item: MarketBillboardItem) => {
 		if (!config) throw new Error('后端尚未连接');
@@ -250,7 +253,7 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 		if (!config || activeView !== 'core-indexes' || !indexes.some((item) => item.id === selectedIndexID)) return;
 		const controller = new AbortController();
 		setSeriesLoading(true);
-		setIndexSeries(null);
+		setIndexSeries(current => current?.index.id === selectedIndexID ? current : null);
 		requestJSON<{ data: MarketIndexSeries }>(config, `/api/v1/market/index-series?id=${encodeURIComponent(selectedIndexID)}&period=day&limit=120`, { signal: controller.signal })
 			.then((payload) => { if (!controller.signal.aborted) setIndexSeries(payload.data); })
 			.catch((error) => { if (!controller.signal.aborted) { setIndexSeries(null); setModuleError(errorMessage(error, '指数走势加载失败')); } })

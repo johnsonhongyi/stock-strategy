@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { requestJSON, type BackendConfig } from './backend';
+import { useAutoRefresh } from './use-auto-refresh';
 import { streamTaskSnapshots } from './task-events';
 import { isResearchRunning, type ResearchJob, type ResearchJobSummary, type ResearchRequest, type ResearchVerification } from './stock-research';
 
@@ -17,13 +18,16 @@ export function useStockResearch(config: BackendConfig | null) {
 	const [selectionVersion, setSelectionVersion] = useState(0);
 	const sequence = useRef(0);
 	const latestJob = useRef<ResearchJob | null>(null);
-	const refreshHistory = useCallback(async () => {
+	const refreshHistory = useCallback(async (signal?: AbortSignal) => {
 		if (!config) return;
-		try { const response = await requestJSON<{ data: ResearchJobSummary[] }>(config, '/api/v1/stocks/research'); setHistory(response.data); }
-		catch (reason) { setError(reason instanceof Error ? reason.message : '研究历史读取失败'); }
-	}, [config]);
+		try { const response = await requestJSON<{ data: ResearchJobSummary[] }>(config, '/api/v1/stocks/research', { signal }); if (signal?.aborted) return; setHistory(response.data);
+			const selected = response.data.find(item => item.id === selectedID);
+			if (selected && latestJob.current && selected.updated_at !== latestJob.current.updated_at) setSelectionVersion(value => value + 1); }
+		catch (reason) { if (!signal?.aborted) setError(reason instanceof Error ? reason.message : '研究历史读取失败'); }
+	}, [config, selectedID]);
 
 	useEffect(() => { void refreshHistory(); }, [refreshHistory]);
+	useAutoRefresh(refreshHistory, 15_000, !!config, config);
 	useEffect(() => {
 		if (!config || !selectedID) return;
 		const controller = new AbortController();

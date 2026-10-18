@@ -1,3 +1,4 @@
+import { useAutoRefresh } from '../lib/use-auto-refresh';
 import {
 	AlertTriangle,
 	BookMarked,
@@ -21,6 +22,7 @@ import {
 	requestJSON,
 } from '../lib/backend';
 
+
 type Props = {
 	config: BackendConfig | null;
 	refreshKey: number;
@@ -40,17 +42,19 @@ export function TradingMastery({ config, refreshKey, onAskAI }: Props) {
 	const [error, setError] = useState('');
 	const [refreshing, setRefreshing] = useState(false);
 
-	const loadIndex = useCallback(async (force = false) => {
+	const loadIndex = useCallback(async (force = false, signal?: AbortSignal, background = false) => {
 		if (!config) return;
-		setIndexState('loading');
+		if (!background) setIndexState('loading');
 		setError('');
 		try {
 			const path = force ? '/api/v1/short-term/mastery/refresh' : '/api/v1/short-term/mastery';
-			const payload = await requestJSON<{ data: MasterySnapshot }>(config, path, force ? { method: 'POST' } : undefined);
+			const payload = await requestJSON<{ data: MasterySnapshot }>(config, path, force ? { method: 'POST', signal } : { signal });
+			if (signal?.aborted) return;
 			setSnapshot(payload.data);
 			setIndexState('ready');
 			setActiveTraderID((current) => payload.data.traders.some((item) => item.id === current) ? current : payload.data.traders[0]?.id || '');
 		} catch (loadError) {
+			if (signal?.aborted) return;
 			setIndexState('error');
 			setError(loadError instanceof Error ? loadError.message : '游资心法加载失败');
 		}
@@ -59,6 +63,7 @@ export function TradingMastery({ config, refreshKey, onAskAI }: Props) {
 	useEffect(() => {
 		void loadIndex();
 	}, [loadIndex, refreshKey]);
+	useAutoRefresh(signal => loadIndex(false, signal, true), 300_000, !!config, config);
 
 	useEffect(() => {
 		if (!config || !activeTraderID) {
@@ -71,7 +76,7 @@ export function TradingMastery({ config, refreshKey, onAskAI }: Props) {
 			.then((payload) => {
 				if (cancelled) return;
 				setDetail(payload.data);
-				setActiveDocumentID(payload.data.documents[0]?.id || '');
+				setActiveDocumentID(current => payload.data.documents.some(item => item.id === current) ? current : payload.data.documents[0]?.id || '');
 				setDetailState('ready');
 			})
 			.catch((loadError) => {
@@ -81,7 +86,7 @@ export function TradingMastery({ config, refreshKey, onAskAI }: Props) {
 				setError(loadError instanceof Error ? loadError.message : '心法正文加载失败');
 			});
 		return () => { cancelled = true; };
-	}, [activeTraderID, config]);
+	}, [activeTraderID, config, snapshot?.fetched_at]);
 
 	const visibleTraders = useMemo(() => {
 		const keyword = query.trim().toLowerCase();

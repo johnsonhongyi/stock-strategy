@@ -1,3 +1,4 @@
+import { startAutoRefresh, useAutoRefresh } from '../lib/use-auto-refresh';
 import { ReasoningControl } from './ReasoningControl';
 import {
 	Activity,
@@ -142,6 +143,7 @@ function saveStockAIModelPreference(provider: StockAIProvider, model: string, ef
 		node_id: target?.node_id || previous.node_id || '', workspace_id: target?.workspace_id || previous.workspace_id || '' }));
 }
 
+
 export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnalysis, onInitialAnalysisConsumed, initialSymbol, onInitialSymbolConsumed, onAskAI, onOpenSettings }: Props) {
 	const research = useStockResearch(config);
 	const [purpose, setPurpose] = useState<ResearchRequest['purpose']>('observe');
@@ -275,8 +277,8 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 				refreshing = false;
 			}
 		};
-		const timer = window.setInterval(() => { void refreshBridge(); }, 20000);
-		return () => { cancelled = true; window.clearInterval(timer); };
+		const stop = startAutoRefresh(refreshBridge, 20_000);
+		return () => { cancelled = true; stop(); };
 	}, [config, analysisProvider, state, codexTarget, codexModel, codexEffort]);
 
 	const changeAnalysisProvider = (provider: StockAIProvider) => {
@@ -473,16 +475,18 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 		onInitialSymbolConsumed?.();
 	}, [initialSymbol, directoryState, directory, requestAnalysis, onInitialSymbolConsumed]);
 
-	const loadHotRanks = useCallback(async (force = false) => {
+	const loadHotRanks = useCallback(async (force = false, signal?: AbortSignal) => {
 		if (!config) return;
 		setHotRankState('loading');
 		setHotRankError('');
 		try {
 			const suffix = force ? '?refresh=1' : '';
-			const payload = await requestJSON<{ data: HotStockRankData }>(config, `/api/v1/stocks/hot-ranks${suffix}`);
+			const payload = await requestJSON<{ data: HotStockRankData }>(config, `/api/v1/stocks/hot-ranks${suffix}`, { signal });
+			if (signal?.aborted) return;
 			setHotRanks(payload.data);
 			setHotRankState('ready');
 		} catch (loadError) {
+			if (signal?.aborted) return;
 			setHotRankError(loadError instanceof Error ? loadError.message : '人气股暂不可用');
 			setHotRankState('error');
 		}
@@ -499,6 +503,7 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 	useEffect(() => {
 		void loadHotRanks();
 	}, [loadHotRanks]);
+	useAutoRefresh(signal => loadHotRanks(false, signal), 60_000, !!config, config);
 
 	useEffect(() => {
 		if (refreshKey <= 0 || lastRefreshKey.current === refreshKey) return;

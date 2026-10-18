@@ -26,6 +26,7 @@ import {
 	Zap,
 } from 'lucide-react';
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { startAutoRefresh, useAutoRefresh } from '../lib/use-auto-refresh';
 import { AppSettings, BackendConfig, ReviewAuthor, ReviewAuthorDeleteResult, ReviewAutomationProfile, ReviewDailyAuthorView, ReviewDailyStockView, ReviewDailySummary, ReviewDailySummaryJob, ReviewDailySummaryWindow, ReviewDailyValidation, ReviewDailyValidationJob, ReviewPost, ReviewSource, ReviewSubscription, ReviewSyncResult, requestJSON } from '../lib/backend';
 import { PortfolioTomorrowExpectation } from './PortfolioTomorrowExpectation';
 import { applyTheme } from '../lib/theme';
@@ -83,25 +84,25 @@ export function ReviewDiary({ config, refreshKey }: Props) {
 	const [error, setError] = useState('');
 	const [summaryWindow, setSummaryWindow] = useState<SummaryWindowDraft | null>(null);
 
-	const loadDiary = useCallback(async () => {
+	const loadDiary = useCallback(async (signal?: AbortSignal, background = false) => {
 		if (!config) return;
-		setState('loading');
-		setError('');
+		if (!background) { setState('loading'); setError(''); }
 		const params = new URLSearchParams({ limit: '80' });
 		if (activeSource !== 'all') params.set('source', activeSource);
 		if (activeAuthor !== 'all') params.set('author_id', activeAuthor);
 		if (appliedQuery) params.set('q', appliedQuery);
 		try {
 			const [sourcePayload, authorPayload, postPayload, subscriptionPayload, settingsPayload, dailySummaryPayload, dailySummaryJobPayload, dailyValidationPayload] = await Promise.all([
-				requestJSON<{ data: ReviewSource[] }>(config, '/api/v1/reviews/sources'),
-				requestJSON<{ data: ReviewAuthor[] }>(config, `/api/v1/reviews/authors?source=${encodeURIComponent(activeSource)}`),
-				requestJSON<{ data: ReviewPost[]; total: number }>(config, `/api/v1/reviews/posts?${params.toString()}`),
-				requestJSON<{ data: ReviewSubscription[] }>(config, '/api/v1/reviews/subscriptions'),
-				requestJSON<{ data: AppSettings }>(config, '/api/v1/settings'),
-				requestJSON<{ data: ReviewDailySummary | null }>(config, '/api/v1/reviews/daily-summary'),
-				requestJSON<{ data: ReviewDailySummaryJob }>(config, '/api/v1/reviews/daily-summary/status'),
-				requestJSON<{ data: ReviewDailyValidation | null; summary_date: string; job: ReviewDailyValidationJob }>(config, '/api/v1/reviews/daily-validation'),
+				requestJSON<{ data: ReviewSource[] }>(config, '/api/v1/reviews/sources', { signal }),
+				requestJSON<{ data: ReviewAuthor[] }>(config, `/api/v1/reviews/authors?source=${encodeURIComponent(activeSource)}`, { signal }),
+				requestJSON<{ data: ReviewPost[]; total: number }>(config, `/api/v1/reviews/posts?${params.toString()}`, { signal }),
+				requestJSON<{ data: ReviewSubscription[] }>(config, '/api/v1/reviews/subscriptions', { signal }),
+				requestJSON<{ data: AppSettings }>(config, '/api/v1/settings', { signal }),
+				requestJSON<{ data: ReviewDailySummary | null }>(config, '/api/v1/reviews/daily-summary', { signal }),
+				requestJSON<{ data: ReviewDailySummaryJob }>(config, '/api/v1/reviews/daily-summary/status', { signal }),
+				requestJSON<{ data: ReviewDailyValidation | null; summary_date: string; job: ReviewDailyValidationJob }>(config, '/api/v1/reviews/daily-validation', { signal }),
 			]);
+			if (signal?.aborted) return;
 			setSources(sourcePayload.data || []);
 			setAuthors(authorPayload.data || []);
 			setPosts(postPayload.data || []);
@@ -116,7 +117,7 @@ export function ReviewDiary({ config, refreshKey }: Props) {
 				const summaryDate = loadedDailyValidationJob.summary_date || dailyValidationPayload.summary_date || '';
 				const query = summaryDate ? `?summary_date=${encodeURIComponent(summaryDate)}` : '';
 				try {
-					const cached = await requestJSON<{ data: ReviewDailyValidation | null; job: ReviewDailyValidationJob }>(config, `/api/v1/reviews/daily-validation${query}`);
+					const cached = await requestJSON<{ data: ReviewDailyValidation | null; job: ReviewDailyValidationJob }>(config, `/api/v1/reviews/daily-validation${query}`, { signal });
 					loadedDailyValidation = cached.data || null;
 					loadedDailyValidationJob = cached.job || loadedDailyValidationJob;
 				} catch {
@@ -128,14 +129,17 @@ export function ReviewDiary({ config, refreshKey }: Props) {
 			setSelectedID((current) => postPayload.data.some((post) => post.id === current) ? current : postPayload.data[0]?.id || '');
 			setState('ready');
 		} catch (loadError) {
+			if (signal?.aborted) return;
 			setState('error');
 			setError(loadError instanceof Error ? loadError.message : '复盘日记加载失败');
 		}
 	}, [activeAuthor, activeSource, appliedQuery, config]);
 
 	useEffect(() => {
-		void loadDiary();
+		const controller = new AbortController(); void loadDiary(controller.signal);
+		return () => controller.abort();
 	}, [loadDiary, refreshKey]);
+	useAutoRefresh(signal => loadDiary(signal, true), 60_000, !!config && dailySummaryJob?.status !== 'running' && dailyValidationJob?.status !== 'running', loadDiary);
 
 	useEffect(() => {
 		const available = reviewProfiles.filter((profile) => profile.source === subscriptionSource);
@@ -175,9 +179,8 @@ export function ReviewDiary({ config, refreshKey }: Props) {
 				// A later poll or returning to this page will recover persisted status.
 			}
 		};
-		void poll();
-		const timer = window.setInterval(() => void poll(), 3000);
-		return () => { active = false; window.clearInterval(timer); };
+		const stopRefresh = startAutoRefresh(() => poll(), 3000);
+		return () => { active = false; stopRefresh(); };
 	}, [config, dailySummaryJob?.window_end, dailySummaryJob?.window_start, dailySummaryRunning]);
 
 	useEffect(() => {
@@ -199,9 +202,8 @@ export function ReviewDiary({ config, refreshKey }: Props) {
 				// Persisted jobs are reloaded when the page is reopened; transient polling failures are safe to ignore.
 			}
 		};
-		void poll();
-		const timer = window.setInterval(() => void poll(), 3000);
-		return () => { active = false; window.clearInterval(timer); };
+		const stopRefresh = startAutoRefresh(() => poll(), 3000);
+		return () => { active = false; stopRefresh(); };
 	}, [config, dailyValidationJob?.summary_date, dailyValidationRunning, loadDailyValidationResult]);
 
 	const openDailyValidation = useCallback(async () => {

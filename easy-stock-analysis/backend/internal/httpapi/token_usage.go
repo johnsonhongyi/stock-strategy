@@ -253,7 +253,14 @@ func (s *Server) tokenUsageSummary(w http.ResponseWriter, r *http.Request) {
 	model := r.URL.Query().Get("model")
 	period := r.URL.Query().Get("period")
 	s.tokenUsage.mu.Lock()
-	defer s.tokenUsage.mu.Unlock()
+	entries := append([]tokenUsageEntry(nil), s.tokenUsage.Entries...)
+	s.tokenUsage.mu.Unlock()
+	desktopEntries, err := s.desktopUsageEntries(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "桌面用量记录读取失败，请稍后重试")
+		return
+	}
+	entries = append(entries, desktopEntries...)
 	type row struct {
 		Date                string `json:"date"`
 		Module              string `json:"module"`
@@ -271,7 +278,7 @@ func (s *Server) tokenUsageSummary(w http.ResponseWriter, r *http.Request) {
 	modules := map[string]bool{}
 	models := map[string]bool{}
 	total := row{}
-	for _, e := range s.tokenUsage.Entries {
+	for _, e := range entries {
 		if from != "" && e.Date < from || to != "" && e.Date > to || module != "" && module != e.Module || model != "" && model != e.Model {
 			continue
 		}

@@ -1,9 +1,14 @@
 import {afterEach,describe,expect,it,vi} from 'vitest';
-import {streamDesktopChat,saveChatRuntime} from './desktop-chat';
+import {streamDesktopChat,saveChatRuntime,loadChatRuntime} from './desktop-chat';
 const config={backendUrl:'http://127.0.0.1:20084',token:'test-only'};
 const response=(data:unknown)=>new Response(JSON.stringify({data}),{status:200,headers:{'Content-Type':'application/json'}});
 afterEach(()=>vi.unstubAllGlobals());
 describe('desktop Codex conversation adapter',()=>{
+ it('queries the strategy capability without changing the saved chat runtime',async()=>{
+  const fetch=vi.fn().mockResolvedValue(response({online:true,models:[]}));vi.stubGlobal('fetch',fetch);
+  await loadChatRuntime(config,'desk','ws','strategy_research');
+  expect(String(fetch.mock.calls[0][0])).toContain('capability=strategy_research');expect(fetch.mock.calls[0][1]?.method||'GET').toBe('GET');
+ });
  it('returns the persisted logical session and completed text without Hermes',async()=>{
   const fetch=vi.fn().mockResolvedValueOnce(response({id:'job',session_id:'logical',status:'queued'})).mockResolvedValueOnce(response({id:'job',session_id:'logical',status:'completed',result:{content:'真实回传'}}));vi.stubGlobal('fetch',fetch);
   const onSession=vi.fn(),onDelta=vi.fn();

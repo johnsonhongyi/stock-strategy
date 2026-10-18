@@ -66,9 +66,14 @@ func (s *Store) TDXDailyCoverage(ctx context.Context, expectedDate string) (TDXD
     return result, nil
 }
 
-func (s *Store) readTDXDaily(ctx context.Context, code string, limit int) ([]foundation.KLine, bool, error) {
+func (s *Store) readTDXDaily(ctx context.Context, symbol string, limit int) ([]foundation.KLine, bool, error) {
+    code, _ := NormalizeSymbol(symbol, "CN")
     if !s.TDXDailyEnabled() || len(code) != 6 { return nil, false, nil }
     prefix := tdxExchangePrefix(code)
+    explicit := strings.ToUpper(strings.TrimSpace(symbol))
+    for _, exchange := range []string{"SH", "SZ", "BJ"} {
+        if strings.HasSuffix(explicit, "."+exchange) || strings.HasPrefix(explicit, exchange) { prefix = exchange; break }
+    }
     if prefix == "" { return nil, false, nil }
     path := filepath.Join(s.tdxDir, prefix+code+".TXT")
     file, err := os.Open(path)

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useReducer } from 'react';
 import { BackendConfig, KLine, requestJSON } from './backend';
+import { useAutoRefresh } from './use-auto-refresh';
 import { ThemeKLineQueue } from './theme-kline-queue';
 import { KLineLookup } from './short-term';
 
@@ -36,5 +37,6 @@ export function useThemeKLines(config: BackendConfig | null, active: boolean, sy
 		return { histories, failed, ready, historyState, klineState, lines: selected ? entry?.lines || [] : [] };
 	}, [queue, revision, selected, symbols]);
 	useEffect(() => { if (refreshKey > 0 && active) queue.refresh(); }, [refreshKey, queue]);
+	useAutoRefresh(() => queue.refresh(), 60_000, !!config && active, queue);
 	return { ...snapshot, retry: () => queue.retryFailed() } as const;
 }

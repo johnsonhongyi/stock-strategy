@@ -1,3 +1,5 @@
+import { connectQuoteStream } from './lib/quote-stream';
+import { useAutoRefresh } from './lib/use-auto-refresh';
 import { useThemeMinutes } from './lib/use-theme-minutes';
 import { KLineChart } from './components/KLineChart';
 import {
@@ -40,7 +42,6 @@ import {
 	Quote,
 	SectorMap,
 	SourceHealth,
-	StreamMessage,
 	ThemeOverview,
 	StockAIAnalysis,
 	ThemeScreenLane,
@@ -268,33 +269,12 @@ export function App() {
 			setStreamStatus('实时流待命');
 			return;
 		}
-		let disposed = false;
-		const socket = new WebSocket(buildStreamUrl(config, streamSymbols, 3000));
-		socket.onopen = () => setStreamStatus('实时行情已连接');
-		socket.onclose = () => {
-			setStreamStatus('实时行情已断开');
-			if (!disposed) logRuntimeEvent('warn', 'quotes', { event: 'websocket_closed' });
-		};
-		socket.onerror = () => {
-			setStreamStatus('实时行情异常');
-			logRuntimeEvent('error', 'quotes', { event: 'websocket_failure' });
-		};
-		socket.onmessage = (event) => {
-			const message = JSON.parse(event.data) as StreamMessage;
-			if (message.type === 'quotes' && message.quotes) {
-				setLiveQuotes((current) => mergeQuotes(current, message.quotes || []));
-				setStreamStatus('实时行情更新中');
-			}
-			if (message.type === 'error') {
-				setStreamStatus(message.error || '实时行情异常');
-				logRuntimeEvent('warn', 'quotes', { event: 'websocket_message_error' });
-			}
-		};
-		return () => {
-			disposed = true;
-			socket.close();
-		};
+		return connectQuoteStream(buildStreamUrl(config, streamSymbols, 3000), quotes => {
+			setLiveQuotes(current => mergeQuotes(current, quotes));
+		}, setStreamStatus);
 	}, [config, streamKey, workspaceMode]);
+
+	useAutoRefresh(() => { setNewsRetryKey(value => value + 1); setSourcesRetryKey(value => value + 1); }, 60_000, !!config && workspaceMode === 'themes', config);
 
 	const refreshAll = () => {
 		if (workspaceMode === 'limit-up') {
@@ -496,7 +476,7 @@ export function App() {
 				<div
 					className="source-health-summary"
 					tabIndex={0}
-					aria-label={`数据源状态，${sources.filter((source) => source.ok).length} 个正常，${sources.filter((source) => !source.ok).length} 个异常`}
+					aria-label={`数据源状态，${sources.filter((source) => source.ok).length} 个正常，${sources.filter((source) => !source.ok && source.status !== 'unknown').length} 个异常，${sources.filter((source) => source.status === 'unknown').length} 个待检查`}
 				>
 					<Database size={16} aria-hidden="true" />
 					<span>数据源</span>
@@ -504,14 +484,14 @@ export function App() {
 					<div className="source-health-popover" role="tooltip">
 						<header>
 							<div><strong>数据源状态</strong><span>查看当前可用情况</span></div>
-							<em>{sources.filter((source) => source.ok).length} 正常 · {sources.filter((source) => !source.ok).length} 异常</em>
+							<em>{sources.filter((source) => source.ok).length} 正常 · {sources.filter((source) => !source.ok && source.status !== 'unknown').length} 异常 · {sources.filter((source) => source.status === 'unknown').length} 待检查</em>
 						</header>
 						<div className="source-health-list">
 							{sources.map((source) => (
 								<div className={source.ok ? 'healthy' : 'unhealthy'} key={source.id}>
 									<i aria-hidden="true" />
 									<span><strong>{source.name}</strong><small>{sourceCategoryLabel(source.category)}</small></span>
-									<em>{source.ok ? '正常' : sourceHealthMessage(source.message)}</em>
+									<em>{source.ok ? source.message || '最近访问成功' : sourceHealthMessage(source.message)}</em>
 								</div>
 							))}
 							{!sources.length && !sourcesError && <p>数据源状态加载中…</p>}

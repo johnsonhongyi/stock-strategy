@@ -170,10 +170,10 @@ func (s *Store) ReadDaily(ctx context.Context, symbol string, requestedMarket st
 		limit = 120
 	}
 	if market == "CN" && s.TDXDailyEnabled() {
-		return s.readTDXDaily(ctx, code, limit)
+		return s.readTDXDaily(ctx, symbol, limit)
 	}
 	if market == "CN" {
-		if lines, found, err := s.readTDXDaily(ctx, code, limit); err != nil {
+		if lines, found, err := s.readTDXDaily(ctx, symbol, limit); err != nil {
 			return nil, false, err
 		} else if found {
 			return lines, true, nil

@@ -71,10 +71,10 @@ func (s *Server) liveMarketStatus() liveMarketStatusSnapshot {
 }
 
 type marketDataFreshness struct {
-	Market       string `json:"market"`
-	Rows         int64  `json:"rows"`
-	LatestDate   string `json:"latest_date,omitempty"`
-	ExpectedDate string `json:"expected_date,omitempty"`
+	Market        string `json:"market"`
+	Rows          int64  `json:"rows"`
+	LatestDate    string `json:"latest_date,omitempty"`
+	ExpectedDate  string `json:"expected_date,omitempty"`
 	InvalidRows   int64  `json:"invalid_rows"`
 	Source        string `json:"source,omitempty"`
 	TDXCodes      int64  `json:"tdx_codes,omitempty"`
@@ -83,7 +83,7 @@ type marketDataFreshness struct {
 	TDXInvalid    int64  `json:"tdx_invalid_codes,omitempty"`
 	CoverageBasis string `json:"coverage_basis,omitempty"`
 	State         string `json:"state"`
-	Error        string `json:"error,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 type scheduledJobStatus struct {
@@ -182,7 +182,9 @@ func (s *Server) marketDataFreshness(ctx context.Context, now time.Time) ([]mark
 					status.TDXFresh = coverage.FreshCodes
 					status.TDXStale = coverage.StaleCodes
 					status.TDXInvalid = coverage.InvalidCodes
-					if coverage.LatestDate != "" { status.LatestDate = coverage.LatestDate }
+					if coverage.LatestDate != "" {
+						status.LatestDate = coverage.LatestDate
+					}
 					switch {
 					case coverage.Codes == 0:
 						status.State = "TDX 文件缺失"
@@ -239,8 +241,8 @@ func parseMarketAppendSchedules(content string) []marketAppendSchedule {
 	labels := map[string]struct{ name, market string }{
 		"cn":       {name: "A 股盘后行情回补", market: "A 股"},
 		"cn-retry": {name: "A 股日线缺口重试", market: "A 股"},
-		"us":     {name: "美股行情回补", market: "美股"},
-		"crypto": {name: "币圈日线回补", market: "币圈"},
+		"us":       {name: "美股行情回补", market: "美股"},
+		"crypto":   {name: "币圈日线回补", market: "币圈"},
 	}
 	var result []marketAppendSchedule
 	for _, raw := range strings.Split(content, "\n") {
@@ -261,7 +263,11 @@ func parseMarketAppendSchedules(content string) []marketAppendSchedule {
 		if !ok {
 			continue
 		}
-		logName := "market-append-" + id + ".log"
+		logID := id
+		if id == "cn-retry" {
+			logID = "cn"
+		}
+		logName := "market-append-" + logID + ".log"
 		result = append(result, marketAppendSchedule{
 			id: id, name: label.name, market: label.market,
 			cron: strings.Join(fields[:5], " "), timezone: timezone,
@@ -433,8 +439,7 @@ func readMarketAppendLog(status *scheduledJobStatus, path string, now time.Time)
 			status.ExitCode = &code
 			status.LastFinished = timePointer(eventAt)
 		}
-		lowerLine := strings.ToLower(line)
-		if !strings.Contains(line, "append failed (exit=") && (strings.Contains(lowerLine, "fail") || strings.Contains(lowerLine, "error") || strings.Contains(lowerLine, "失败") || strings.Contains(lowerLine, "错误") || strings.Contains(lowerLine, "traceback")) {
+		if !strings.Contains(line, "append failed (exit=") && appendLogHasFailure(line) {
 			if status.LastStatus == "运行中" || status.LastStatus == "失败" || status.LastStatus == "部分失败" {
 				status.LastError = runtimelog.Redact(truncateStatusText(line, 1000))
 			}
@@ -445,6 +450,23 @@ func readMarketAppendLog(status *scheduledJobStatus, path string, now time.Time)
 		status.LastMessage = "日志记录任务已启动但长时间没有结束记录"
 	}
 	return true
+}
+
+func appendLogHasFailure(line string) bool {
+	fields := strings.Fields(strings.ToLower(line))
+	filtered := fields[:0]
+	for _, field := range fields {
+		if field != "failures=0" {
+			filtered = append(filtered, field)
+		}
+	}
+	value := strings.Join(filtered, " ")
+	for _, marker := range []string{"fail", "error", "失败", "错误", "traceback"} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseAppendLogTime(line string) time.Time {

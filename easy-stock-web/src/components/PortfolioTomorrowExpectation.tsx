@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BackendConfig, PortfolioExpectationJob, PortfolioExpectationReport, StockDirectoryData, StockDirectoryEntry, requestJSON } from '../lib/backend';
 import { PortfolioDraft, portfolioDraftToHoldings, readPortfolioDraft, writePortfolioDraft } from '../lib/portfolio-draft';
 import { PortfolioSetupForm } from './PortfolioSetupForm';
+import { startAutoRefresh, useAutoRefresh } from '../lib/use-auto-refresh';
 
 type Props = {
 	config: BackendConfig | null;
@@ -18,19 +19,21 @@ export function PortfolioTomorrowExpectation({ config, summaryDate }: Props) {
 	const [error, setError] = useState('');
 	const running = job?.status === 'running';
 
-	useEffect(() => {
-		if (!config || !summaryDate) return;
-		let active = true;
-		requestJSON<{ data: PortfolioExpectationJob | null }>(config, `/api/v1/reviews/portfolio-expectations/latest?summary_date=${encodeURIComponent(summaryDate)}`)
-			.then((payload) => {
-				if (!active || !payload.data) return;
-				const draft = readPortfolioDraft();
-				const current = portfolioDraftToHoldings(draft.holdings);
-				if (draft.profile === payload.data.request.trader_profile && sameHoldings(current, payload.data.request.holdings)) setJob(payload.data);
-			})
-			.catch(() => undefined);
-		return () => { active = false; };
-	}, [config, summaryDate]);
+	const loadLatest = useCallback(async (signal: AbortSignal) => {
+        if (!config || !summaryDate) return;
+        try {
+            const payload = await requestJSON<{ data: PortfolioExpectationJob | null }>(config, `/api/v1/reviews/portfolio-expectations/latest?summary_date=${encodeURIComponent(summaryDate)}`, { signal });
+            if (signal.aborted || !payload.data) return;
+            const draft = readPortfolioDraft(), current = portfolioDraftToHoldings(draft.holdings);
+            if (draft.profile === payload.data.request.trader_profile && sameHoldings(current, payload.data.request.holdings)) setJob(payload.data);
+        } catch { /* Keep the last persisted report; the next read retries. */ }
+    }, [config, summaryDate]);
+    useEffect(() => {
+        setJob(null);
+        const controller = new AbortController(); void loadLatest(controller.signal);
+        return () => controller.abort();
+    }, [loadLatest]);
+    useAutoRefresh(loadLatest, 30_000, !!config && !!summaryDate && !running && !starting, loadLatest);
 
 	useEffect(() => {
 		if (!config || !job || job.status !== 'running') return;
@@ -46,9 +49,8 @@ export function PortfolioTomorrowExpectation({ config, summaryDate }: Props) {
 				// Returning to the review page reloads the persisted job.
 			}
 		};
-		void poll();
-		const timer = window.setInterval(() => void poll(), 3000);
-		return () => { active = false; window.clearInterval(timer); };
+		const stop = startAutoRefresh(poll, 3000);
+		return () => { active = false; stop(); };
 	}, [config, job?.id, job?.status]);
 
 	const startExpectation = useCallback(async (draft: PortfolioDraft, force = false) => {
