@@ -104,7 +104,14 @@ export function useStockResearch(config: BackendConfig | null) {
 		} catch (reason) { setError(reason instanceof Error ? reason.message : '核验失败'); }
 		finally { setVerifying(false); }
 	}, [config, job]);
-	return { job, history, error, starting, verifying, selectedID, start, open, clear, cancel, remove, verify, refreshHistory };
+	const loadComparison = useCallback(async (ids: string[]) => {
+		if (!config) throw new Error('后端尚未连接');
+		const uniqueIDs = [...new Set(ids)].slice(0, 4);
+		if (uniqueIDs.length < 2) throw new Error('请选择同一股票的至少两条研究记录');
+		const responses = await Promise.all(uniqueIDs.map((id) => requestJSON<{ data: ResearchJob }>(config, `/api/v1/stocks/research/${encodeURIComponent(id)}`)));
+		return responses.map((response) => response.data);
+	}, [config]);
+	return { job, history, error, starting, verifying, selectedID, start, open, clear, cancel, remove, verify, refreshHistory, loadComparison };
 }
 
 function sameResearchJob(previous: ResearchJob | null, next: ResearchJob) {

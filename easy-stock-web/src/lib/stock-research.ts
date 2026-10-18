@@ -34,6 +34,36 @@ export function researchSummaryLevel(item: Pick<ResearchJobSummary, 'analysis_le
 export function filterResearchHistory(items: ResearchJobSummary[], level: ResearchLevelFilter = 'all') {
 	return level === 'all' ? items : items.filter((item) => researchSummaryLevel(item) === level);
 }
+type ResearchModelEffortSource = { request: Pick<ResearchRequest, 'model' | 'reasoning_effort'>; model?: string; reasoning_effort?: string };
+function stripResearchEffortSuffix(model: string, effort: string) {
+	const id = model.trim().toLowerCase();
+	const suffix = effort.trim().toLowerCase();
+	return suffix && id.endsWith(`-${suffix}`) ? id.slice(0, -(suffix.length + 1)) : id;
+}
+export function researchModelEffortConfiguration(item: ResearchModelEffortSource) {
+	const effort = (item.request.reasoning_effort || item.reasoning_effort || '').trim().toLowerCase();
+	const requestedModel = (item.request.model || '').trim();
+	const observedModel = (item.model || '').trim();
+	const sourceModel = requestedModel || (observedModel.toLowerCase() === effort ? '' : observedModel);
+	return { model: stripResearchEffortSuffix(sourceModel, effort), effort };
+}
+export function researchModelEffortKey(item: Pick<ResearchJobSummary, 'model' | 'reasoning_effort' | 'request'>) {
+	const { model, effort } = researchModelEffortConfiguration(item);
+	return model && effort ? JSON.stringify([model, effort]) : '';
+}
+export function deduplicateResearchHistoryByModelEffort(items: ResearchJobSummary[]) {
+	const latest = new Map<string, { item: ResearchJobSummary; index: number; startedAt: number }>();
+	items.forEach((item, index) => {
+		const configKey = researchModelEffortKey(item);
+		const symbol = (item.request.symbol || '').trim().toUpperCase();
+		const key = configKey && symbol ? JSON.stringify([symbol, configKey]) : `record:${item.id}`;
+		const parsedStartedAt = Date.parse(item.started_at);
+		const startedAt = Number.isFinite(parsedStartedAt) ? parsedStartedAt : (Date.parse(item.updated_at) || 0);
+		const previous = latest.get(key);
+		if (!previous || startedAt > previous.startedAt) latest.set(key, { item, index, startedAt });
+	});
+	return [...latest.values()].sort((left, right) => left.index - right.index).map(({ item }) => item);
+}
 export function researchLevelShortLabel(level?: ResearchAnalysisLevel) {
 	return ({ quantitative: '量', quick: '快', standard: '标', deep: '深' } as const)[level || 'deep'] || '深';
 }
@@ -43,14 +73,14 @@ export function formatCompactResearchDuration(durationMS?: number) {
 	return seconds < 60 ? seconds + '秒' : Math.round(seconds / 60) + '分';
 }
 export function researchModelEffortLabel(model?: string, effort?: string) {
-	const id = (model || '').trim().toLowerCase();
-	if (!id) return '';
-	const tokens = id.split(/[^a-z0-9]+/).filter(Boolean);
-	const family = ['luna', 'sol', 'astra', 'terra'].find((value) => tokens.includes(value)) || tokens[tokens.length - 1] || id;
 	const normalizedEffort = (effort || '').trim().toLowerCase();
+	const id = stripResearchEffortSuffix((model || '').trim(), normalizedEffort);
+	if (!id || id === normalizedEffort) return '';
+	const tokens = id.split(/[^a-z0-9]+/).filter(Boolean);
+	const family = ['luna', 'sol', 'astra', 'terra', 'flash', 'pro', 'sonnet', 'opus', 'haiku'].find((value) => tokens.includes(value)) || tokens[tokens.length - 1] || id;
 	const effortCode: Record<string, string> = { none: '', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' };
 	const suffix = effortCode[normalizedEffort] ?? normalizedEffort;
-	return suffix ? family + '-' + suffix : family;
+	return suffix ? family + ' / ' + suffix : family;
 }
 export const conditionStatusLabel = (status: string) => ({ pending: '待观察', met: '已满足', not_met: '窗口结束未满足', not_yet: '尚未满足', unavailable: '数据不足', manual_review: '需人工核实' }[status] || '待观察');
 export function safeResearchURL(value?: string) {
