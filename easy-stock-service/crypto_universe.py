@@ -8,6 +8,7 @@ import json
 import os
 import time
 import urllib.request
+import urllib.error
 
 SVC = os.path.dirname(os.path.abspath(__file__))
 STATIC = ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA"]
@@ -26,7 +27,17 @@ LEVER_SUFFIX = ("3L", "3S", "2L", "2S", "BULL", "BEAR", "UP", "DOWN")
 
 def _get(url, timeout=30):
     req = urllib.request.Request(url, headers=UA)
-    return json.load(market_cache.urlopen(req, timeout=timeout))
+    for attempt in range(2):
+        try:
+            # A current universe must come from a live response, never stale fallback.
+            with market_cache.urlopen(req, timeout=timeout, force_refresh=True) as response:
+                return json.load(response)
+        except urllib.error.HTTPError:
+            raise  # Respect provider throttling and status failures without retrying.
+        except (urllib.error.URLError, OSError):
+            if attempt:
+                raise
+            time.sleep(1)
 
 
 def load_cfg():

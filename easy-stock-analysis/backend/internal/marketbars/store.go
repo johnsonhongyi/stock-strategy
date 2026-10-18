@@ -339,6 +339,14 @@ func (s *Store) resolve(ctx context.Context, symbol string, requestedMarket stri
 func NormalizeSymbol(symbol string, requestedMarket string) (string, string) {
 	value := strings.ToUpper(strings.TrimSpace(symbol))
 	market := strings.ToUpper(strings.TrimSpace(requestedMarket))
+	if len(value) == 8 && (strings.HasPrefix(value, "SH") || strings.HasPrefix(value, "SZ") || strings.HasPrefix(value, "BJ")) {
+		if _, err := strconv.Atoi(value[2:]); err == nil {
+			value = value[2:]
+			if market == "" {
+				market = "CN"
+			}
+		}
+	}
 	if market != "" {
 		switch market {
 		case "CN", "A", "A股", "SH", "SZ", "BJ":
