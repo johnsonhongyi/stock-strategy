@@ -11,6 +11,7 @@ export function startAutoRefresh(refresh: Refresh, intervalMS: number) {
  let timer: ReturnType<typeof setTimeout> | undefined;
  let controller: AbortController | undefined;
  let lastStarted = -Infinity;
+ let interrupted = false, recoveryPending = false;
  const available = () => !document.hidden && navigator.onLine !== false;
  const schedule = () => {
   clearTimeout(timer);
@@ -19,7 +20,7 @@ export function startAutoRefresh(refresh: Refresh, intervalMS: number) {
  const run = async () => {
   if (disposed || running || !available()) return;
   clearTimeout(timer);
-  running = true; lastStarted = Date.now();
+  running = true; recoveryPending = false; lastStarted = Date.now();
   const current = new AbortController(); controller = current;
   const deadline = setTimeout(() => current.abort(), 45_000);
   try { await refresh(current.signal); }
@@ -29,12 +30,20 @@ export function startAutoRefresh(refresh: Refresh, intervalMS: number) {
    clearTimeout(deadline);
    running = false;
    if (controller === current) controller = undefined;
-   schedule();
+   if (!disposed && recoveryPending && available()) queueRecovery(); else schedule();
   }
  };
+ const queueRecovery = () => {
+  recoveryPending = false; clearTimeout(timer);
+  const delay = Math.max(0, 1000 - (Date.now() - lastStarted));
+  if (delay) timer = setTimeout(() => { void run(); }, delay); else void run();
+ };
  const resume = () => {
-  if (!available()) { clearTimeout(timer); controller?.abort(); return; }
-  if (!running && Date.now() - lastStarted >= 1000) void run();
+  if (!available()) { interrupted = true; clearTimeout(timer); controller?.abort(); return; }
+  const recover = interrupted || Date.now() - lastStarted >= 1000;
+  interrupted = false;
+  if (running) { if (recover) recoveryPending = true; return; }
+  if (recover) queueRecovery();
  };
  document.addEventListener('visibilitychange', resume);
  window.addEventListener('focus', resume);

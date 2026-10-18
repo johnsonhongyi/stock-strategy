@@ -50,6 +50,7 @@ type Server struct {
 	autoFollowDBPath      string
 	webAuth               *webAuthStore
 	linkageContextMu      sync.Mutex
+	marketStatusCache     systemStatusCache
 	tdx                   *tdx.Client
 	marketNetwork         *marketnetwork.Config
 	sourceHealth          *sourceHealthMonitor
@@ -478,6 +479,7 @@ func (s *Server) Close() error {
 	if s.emotionProgress != nil {
 		s.emotionProgress.close()
 	}
+	s.closeSystemStatusCache()
 	var closeErrors []error
 	if s.webAuth != nil {
 		closeErrors = append(closeErrors, s.webAuth.db.Close())

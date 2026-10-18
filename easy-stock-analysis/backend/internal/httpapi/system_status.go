@@ -104,16 +104,18 @@ type scheduledJobStatus struct {
 }
 
 type systemStatusResponse struct {
-	GeneratedAt       time.Time                `json:"generated_at"`
-	APIState          string                   `json:"api_state"`
-	APIStartedAt      time.Time                `json:"api_started_at,omitempty"`
-	APIUptimeSeconds  int64                    `json:"api_uptime_seconds"`
-	DatabaseState     string                   `json:"database_state"`
-	DatabaseError     string                   `json:"database_error,omitempty"`
-	LiveMarket        liveMarketStatusSnapshot `json:"live_market"`
-	MarketData        []marketDataFreshness    `json:"market_data"`
-	ScheduledJobs     []scheduledJobStatus     `json:"scheduled_jobs"`
-	ScheduleReadError string                   `json:"schedule_read_error,omitempty"`
+	GeneratedAt        time.Time                `json:"generated_at"`
+	APIState           string                   `json:"api_state"`
+	APIStartedAt       time.Time                `json:"api_started_at,omitempty"`
+	APIUptimeSeconds   int64                    `json:"api_uptime_seconds"`
+	DatabaseState      string                   `json:"database_state"`
+	DatabaseError      string                   `json:"database_error,omitempty"`
+	DatabaseCheckedAt  *time.Time               `json:"database_checked_at,omitempty"`
+	DatabaseRefreshing bool                     `json:"database_refreshing"`
+	LiveMarket         liveMarketStatusSnapshot `json:"live_market"`
+	MarketData         []marketDataFreshness    `json:"market_data"`
+	ScheduledJobs      []scheduledJobStatus     `json:"scheduled_jobs"`
+	ScheduleReadError  string                   `json:"schedule_read_error,omitempty"`
 }
 
 type marketAppendSchedule struct {
@@ -142,9 +144,14 @@ func (s *Server) systemStatus(w http.ResponseWriter, r *http.Request) {
 		response.DatabaseState = "不可用"
 		response.DatabaseError = "行情数据库未连接"
 	} else {
-		response.MarketData, response.DatabaseError = s.marketDataFreshness(r.Context(), now)
+		response.MarketData, response.DatabaseError, response.DatabaseCheckedAt, response.DatabaseRefreshing = s.cachedMarketDataFreshness(now)
 		if response.DatabaseError != "" {
-			response.DatabaseState = "异常"
+			response.DatabaseState = "读取异常"
+		} else if response.DatabaseRefreshing {
+			response.DatabaseState = "更新中"
+			if response.DatabaseCheckedAt == nil {
+				response.DatabaseState = "检查中"
+			}
 		}
 	}
 	response.ScheduledJobs, response.ScheduleReadError = loadMarketAppendStatuses(now)

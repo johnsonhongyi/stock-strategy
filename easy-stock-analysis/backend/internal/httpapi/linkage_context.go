@@ -307,12 +307,14 @@ func (s *Server) linkageEventsHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "linkage workspace is not configured")
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
 	var events []linkage.ContextEvent
 	var err error
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("latest")), "true") {
-		events, err = s.linkage.LatestContextEventsForWorkspace(r.Context(), workspaceID, limit)
+		events, err = s.linkage.LatestContextEventsForWorkspace(ctx, workspaceID, limit)
 	} else {
-		events, err = s.linkage.ContextEventsForWorkspace(r.Context(), workspaceID, strings.TrimSpace(r.URL.Query().Get("after")), limit)
+		events, err = s.linkage.ContextEventsForWorkspace(ctx, workspaceID, strings.TrimSpace(r.URL.Query().Get("after")), limit)
 	}
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "could not load linkage events")

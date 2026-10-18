@@ -34,6 +34,20 @@ describe('automatic data refresh lifecycle', () => {
   network.onLine = false; browser.dispatchEvent(new Event('offline')); await vi.advanceTimersByTimeAsync(5000); expect(read).toHaveBeenCalledTimes(1);
   network.onLine = true; browser.dispatchEvent(new Event('online')); await Promise.resolve(); expect(read).toHaveBeenCalledTimes(2);
  });
+ it('recovers a rapid offline/online transition within the debounce window', async () => {
+  const read = vi.fn(async () => {}); stops.push(startAutoRefresh(read, 30_000));
+  await vi.advanceTimersByTimeAsync(30_000); expect(read).toHaveBeenCalledTimes(1);
+  network.onLine = false; browser.dispatchEvent(new Event('offline'));
+  network.onLine = true; browser.dispatchEvent(new Event('online')); browser.dispatchEvent(new Event('focus'));
+  await vi.advanceTimersByTimeAsync(1000); expect(read).toHaveBeenCalledTimes(2);
+ });
+ it('queues recovery when connectivity returns before the aborted read settles', async () => {
+  const read = vi.fn((signal: AbortSignal) => new Promise<void>((_resolve,reject) => signal.addEventListener('abort',()=>reject(new DOMException('offline','AbortError')))));
+  stops.push(startAutoRefresh(read, 30_000)); await vi.advanceTimersByTimeAsync(30_000);
+  network.onLine = false; browser.dispatchEvent(new Event('offline'));
+  network.onLine = true; browser.dispatchEvent(new Event('online'));
+  await vi.advanceTimersByTimeAsync(1000); expect(read).toHaveBeenCalledTimes(2);
+ });
  it('aborts the active read and removes all future work on cleanup', async () => {
   let signal: AbortSignal | undefined;
   const read = vi.fn((value: AbortSignal) => { signal = value; return new Promise<void>(resolve => value.addEventListener('abort', () => resolve())); });

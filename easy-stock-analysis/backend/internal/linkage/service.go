@@ -179,6 +179,8 @@ func NewService(databasePath, targetsPath string) (*Service, error) {
 		);
 		CREATE INDEX IF NOT EXISTS idx_linkage_context_events_occurred
 			ON linkage_context_events(occurred_at,event_id);
+        CREATE INDEX IF NOT EXISTS idx_linkage_context_events_causation_time
+            ON linkage_context_events(causation_id,occurred_at,event_id);
 		CREATE TABLE IF NOT EXISTS linkage_context_evidence (
 			workspace_id TEXT NOT NULL,
 			node_id TEXT NOT NULL,
@@ -1139,13 +1141,17 @@ func (s *Service) ContextEvents(ctx context.Context, after string, limit int) ([
 	return events, rows.Err()
 }
 
+// Resolve workspace snapshot IDs once using the expression index, then seek events.
+// A correlated JSON lookup per event can block the single-writer connection for seconds.
+const contextEventWorkspaceScope = `event.causation_id IN (
+ SELECT snapshot_id FROM linkage_context_snapshots
+ WHERE CASE WHEN json_valid(CAST(payload AS TEXT)) THEN json_extract(CAST(payload AS TEXT),'$.workspace_id') END=?)`
+
 func (s *Service) ContextEventsForWorkspace(ctx context.Context, workspaceID, after string, limit int) ([]ContextEvent, error) {
 	if limit < 1 || limit > 500 {
 		limit = 100
 	}
-	scope := `EXISTS (SELECT 1 FROM linkage_context_snapshots AS snapshot
-		WHERE snapshot.snapshot_id=event.causation_id
-		AND json_extract(CAST(snapshot.payload AS TEXT),'$.workspace_id')=?)`
+	scope := contextEventWorkspaceScope
 	query := `SELECT event.event_id,event.event_type,event.origin_node,event.causation_id,event.source_snapshot_ids,
 		event.trade_date,event.occurred_at,event.payload FROM linkage_context_events AS event WHERE ` + scope +
 		` ORDER BY event.occurred_at,event.event_id LIMIT ?`
@@ -1179,9 +1185,7 @@ func (s *Service) LatestContextEventsForWorkspace(ctx context.Context, workspace
 	rows, err := s.db.QueryContext(ctx, `SELECT event.event_id,event.event_type,event.origin_node,event.causation_id,
 		event.source_snapshot_ids,event.trade_date,event.occurred_at,event.payload
 		FROM linkage_context_events AS event
-		WHERE EXISTS (SELECT 1 FROM linkage_context_snapshots AS snapshot
-			WHERE snapshot.snapshot_id=event.causation_id
-			AND json_extract(CAST(snapshot.payload AS TEXT),'$.workspace_id')=?)
+		WHERE `+contextEventWorkspaceScope+`
 		ORDER BY event.occurred_at DESC,event.event_id DESC LIMIT ?`, workspaceID, limit)
 	if err != nil {
 		return nil, err

@@ -42,6 +42,8 @@ type SystemStatus = {
 	api_uptime_seconds: number;
 	database_state: string;
 	database_error?: string;
+	database_checked_at?: string;
+	database_refreshing?: boolean;
 	live_market: {
 		running: boolean;
 		state: string;
@@ -185,6 +187,7 @@ export function SystemStatusWorkspace({ config, refreshKey }: { config: BackendC
 	const [loadError, setLoadError] = useState('');
 	const [lastUpdated, setLastUpdated] = useState('');
 	const [manualRefreshKey, setManualRefreshKey] = useState(0);
+	const refreshInterval = status?.database_refreshing ? 5000 : 60_000;
 
 	useEffect(() => {
 		let active = true;
@@ -214,13 +217,13 @@ export function SystemStatusWorkspace({ config, refreshKey }: { config: BackendC
 			return () => { active = false; controller.abort(); };
 		}
 		void load();
-		const stopRefresh = startAutoRefresh(() => load(), 60_000);
+		const stopRefresh = startAutoRefresh(() => load(), refreshInterval);
 		return () => {
 			active = false;
 			controller.abort();
 			stopRefresh();
 		};
-	}, [config, refreshKey, manualRefreshKey]);
+	}, [config, refreshKey, manualRefreshKey, refreshInterval]);
 
 	const live = status?.live_market;
 	return (
@@ -242,7 +245,7 @@ export function SystemStatusWorkspace({ config, refreshKey }: { config: BackendC
 			{status && <>
 				<section className="system-status-overview">
 					<StatusCard icon={<Server size={17} />} label="API 服务" value={status.api_state} detail={`运行 ${duration(status.api_uptime_seconds)} · 启动 ${formatTime(status.api_started_at)}`} tone={stateTone(status.api_state)} />
-					<StatusCard icon={<Database size={17} />} label="统一行情数据库" value={status.database_state} detail={status.database_error || 'SQLite 可读，行情摘要查询正常'} tone={stateTone(status.database_state)} />
+					<StatusCard icon={<Database size={17} />} label="统一行情数据库" value={status.database_state} detail={status.database_error || (status.database_refreshing ? '正在后台检查，完成后自动更新' : status.database_checked_at ? '统计时间：' + formatTime(status.database_checked_at) : '等待后台统计结果')} tone={stateTone(status.database_state)} />
 					<StatusCard icon={<Activity size={17} />} label="盘中自适应调度" value={liveStateLabels[live?.state || ''] || live?.state || '未知'} detail={live?.running ? `最近执行 ${formatTime(live.last_run_at)} · 下次 ${formatTime(live.next_run_at)}` : `最近检查 ${formatTime(live?.last_check_at)} · 当前不在运行`} tone={stateTone(live?.last_run_status || liveStateLabels[live?.state || ''] || '')} />
 				</section>
 
@@ -282,7 +285,7 @@ export function SystemStatusWorkspace({ config, refreshKey }: { config: BackendC
 					<details className="system-status-log"><summary>查看最近日志 · {job.log_path}</summary>{job.recent_log?.length ? <pre>{job.recent_log.join('\n')}</pre> : <p>当前没有可显示的任务日志。</p>}</details>
 				</article>)}</div>
 				</section>
-				<p className="system-status-storage-note"><CheckCircle2 size={15} />行情与任务日志保存在外置持久化目录；手动重试校验通过后更新行情库。接口生成时间：{formatTime(status.generated_at)}</p>
+				<p className="system-status-storage-note"><CheckCircle2 size={15} />行情与任务日志保存在外置持久化目录；手动重试校验通过后更新行情库。行情统计时间：{formatTime(status.database_checked_at)} · 接口生成时间：{formatTime(status.generated_at)}</p>
 			</>}
 			<TypographySettings />
 		</section>
