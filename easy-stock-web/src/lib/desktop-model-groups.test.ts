@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { desktopModelGroups, resolveDesktopModelSelection, selectedDesktopModelGroup } from './desktop-model-groups';
+import { desktopModelGroups, resolveDesktopModelSelection, resolveAvailableDesktopModelSelection, selectedDesktopModelGroup } from './desktop-model-groups';
 
 const models = [
   ...['high', 'medium', 'low'].map(effort => ({ id: `gemini-3.8-flash-${effort}`, name: `Gemini 3.8 Flash (${effort})`, efforts: [effort] })),
-  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (Thinking)', efforts: ['low', 'medium', 'high'] },
-  { id: 'claude-opus-4-6-thinking', name: 'Claude Opus 4.6 (Thinking)', efforts: ['low', 'high'] },
+  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (Thinking)', efforts: ['auto'] },
+  { id: 'claude-opus-4-6-thinking', name: 'Claude Opus 4.6 (Thinking)', efforts: ['auto'] },
 ];
 
 describe('desktop model display and execution mapping', () => {
@@ -27,6 +27,18 @@ describe('desktop model display and execution mapping', () => {
     expect(resolveDesktopModelSelection(limited, 'antigravity_desktop', 'gemini-3.8-flash-medium', 'high'))
       .toEqual({ model: 'gemini-3.8-flash-low', reasoning_effort: 'low' });
     expect(resolveDesktopModelSelection([], 'antigravity_desktop', 'missing', 'low')).toBeNull();
+  });
+  it('uses the model default when the live catalog declares no effort tiers', () => {
+    expect(resolveDesktopModelSelection(models, 'antigravity_desktop', 'claude-sonnet-4-6', 'high'))
+      .toEqual({ model: 'claude-sonnet-4-6', reasoning_effort: 'auto' });
+    expect(resolveDesktopModelSelection(models, 'antigravity_desktop', 'claude-opus-4-6-thinking', 'max'))
+      .toEqual({ model: 'claude-opus-4-6-thinking', reasoning_effort: 'auto' });
+  });
+  it('preserves a model family after a previously selected tier is removed', () => {
+    const limited = models.filter(model => model.id !== 'gemini-3.8-flash-high');
+    expect(resolveAvailableDesktopModelSelection(limited, 'antigravity_desktop', 'gemini-3.8-flash-high', 'high'))
+      .toEqual({ model: 'gemini-3.8-flash-low', reasoning_effort: 'low' });
+    expect(resolveAvailableDesktopModelSelection([], 'antigravity_desktop', 'removed', 'high')).toBeNull();
   });
   it('preserves Codex names, IDs, and effort ordering without mutating the catalog', () => {
     const codex = [{ id: 'gpt-6-luna', name: 'Luna', efforts: ['medium', 'low', 'high'] }];

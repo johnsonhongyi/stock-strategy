@@ -5,6 +5,14 @@ const response=(data:unknown)=>new Response(JSON.stringify({data}),{status:200,h
 const rawResponse=(data:unknown)=>new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});
 afterEach(()=>vi.unstubAllGlobals());
 describe('desktop bridge conversation adapter',()=>{
+ it('discovers a fixed-tier AGV model and clears an obsolete manual effort before enqueueing',async()=>{
+  const fetch=vi.fn().mockImplementation((input:RequestInfo|URL)=>{
+   if(String(input).includes('/api/v1/linkage/targets'))return rawResponse({targets:[{node_id:'agv-main',workspace_id:'ws-agv',label:'AGV'}]});
+   return response({config:{provider:'codex_desktop',node_id:'codex-main',workspace_id:'ws-codex',model:'gpt-6-luna',reasoning_effort:'high'},online:true,models:[{id:'claude-sonnet-4-6',name:'Claude Sonnet 4.6 (Thinking)',efforts:['auto']}],message:''});
+  });vi.stubGlobal('fetch',fetch);
+  expect(await prepareDesktopChatRuntime(config,{provider:'antigravity_desktop',node_id:'',workspace_id:'',model:'claude-sonnet-4-6',reasoning_effort:'high'}))
+   .toMatchObject({provider:'antigravity_desktop',model:'claude-sonnet-4-6',reasoning_effort:'auto'});
+ });
  it('queries the strategy capability without changing the saved chat runtime',async()=>{
   const fetch=vi.fn().mockResolvedValue(response({online:true,models:[]}));vi.stubGlobal('fetch',fetch);
   await loadChatRuntime(config,'desk','ws','strategy_research');

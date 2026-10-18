@@ -10,7 +10,21 @@ import (
 	"time"
 
 	"easy-stock/backend/internal/linkage"
+	"easy-stock/backend/internal/stockanalysis"
 )
+
+func TestValidDesktopSelectionUsesAutoForFixedAntigravityModel(t *testing.T) {
+	models := []desktopChatModel{{ID: "claude-sonnet-4-6", Efforts: []string{"auto"}}, {ID: "gpt-6-luna", Efforts: []string{"low"}}}
+	if !validDesktopSelection(desktopChatConfig{Provider: "antigravity_desktop", Model: "claude-sonnet-4-6", Effort: "auto"}, models) {
+		t.Fatal("fixed Antigravity model should accept automatic reasoning")
+	}
+	if validDesktopSelection(desktopChatConfig{Provider: "antigravity_desktop", Model: "claude-sonnet-4-6", Effort: "high"}, models) {
+		t.Fatal("fixed Antigravity model should not accept an unadvertised effort")
+	}
+	if validDesktopSelection(desktopChatConfig{Provider: "codex_desktop", Model: "gpt-6-luna", Effort: "auto"}, models) {
+		t.Fatal("Codex model validation should remain strict")
+	}
+}
 
 func TestDesktopBridgeTestTerminalJobsAndSessionsAreRemoved(t *testing.T) {
 	s, _, exec := aiPeerFixture(t)
@@ -238,4 +252,18 @@ func TestAntigravityRuntimeAndBridgeTestUseAgvTarget(t *testing.T) {
 	// The explicit node selects the test engine even when the saved runtime points at the other bridge.
 	queueBridgeTest("codex_desktop", "agv-main", "ws-agv", "gemini-3.8-flash")
 	queueBridgeTest("antigravity_desktop", "codex-main", "ws-codex", "gpt-6-luna")
+	if _, err := chatDB.Exec("INSERT OR REPLACE INTO desktop_chat_config VALUES(1,?)", `{"provider":"codex_desktop"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chatDB.Exec("UPDATE ai_desktop SET detail=? WHERE node_id='agv-main'", `{"capabilities":["ai_chat_v1","stock_research_v1"],"models":[{"id":"claude-sonnet-4-6","efforts":["auto"]}]}`); err != nil {
+		t.Fatal(err)
+	}
+	request := stockanalysis.ResearchRequest{AIProvider: "antigravity_desktop", DesktopNodeID: "agv-main", DesktopWorkspaceID: "ws-agv", Model: "claude-sonnet-4-6", ReasoningEffort: "auto"}
+	if _, err := s.stockResearchDesktopConfig(chatDB, request); err != nil {
+		t.Fatalf("AGV research must use its own provider even when global chat uses Codex: %v", err)
+	}
+	request.ReasoningEffort = "high"
+	if _, err := s.stockResearchDesktopConfig(chatDB, request); err == nil {
+		t.Fatal("unadvertised Claude effort must not enter the research queue")
+	}
 }

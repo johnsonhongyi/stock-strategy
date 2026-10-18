@@ -2,7 +2,7 @@ import type { ChatRuntime } from './desktop-chat';
 
 type Model = ChatRuntime['models'][number];
 export type DesktopModelGroup = Model & { variants: Model[] };
-const effortOrder = ['low', 'medium', 'high', 'xhigh', 'max'];
+const effortOrder = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 export function desktopModelGroups(models: Model[], provider: string): DesktopModelGroup[] {
   const groups = new Map<string, DesktopModelGroup>();
@@ -31,8 +31,10 @@ export function selectedDesktopModelGroup(groups: DesktopModelGroup[], model: st
 }
 
 export function resolveDesktopModelSelection(models: Model[], provider: string, model: string, effort: string) {
-  const group = selectedDesktopModelGroup(desktopModelGroups(models, provider), model);
-  if (!group) return null;
+  const groups = desktopModelGroups(models, provider);
+  const family = provider === 'antigravity_desktop' ? model.replace(/-(low|medium|high|xhigh|max)$/, '') : model;
+  const group = selectedDesktopModelGroup(groups, model) || groups.find(item => item.id === family);
+  if (!group || !group.efforts.length) return null;
   const selectedEffort = group.efforts.includes(effort) ? effort : group.efforts[0];
   const variant = group.variants.find(item => item.efforts.includes(selectedEffort));
   return variant ? { model: variant.id, reasoning_effort: selectedEffort } : null;
