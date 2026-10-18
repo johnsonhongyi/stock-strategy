@@ -18,7 +18,7 @@ const desktopUsageSchema = `CREATE TABLE IF NOT EXISTS desktop_token_usage (
 // On first open, existing returned usage is recovered from retained job receipts.
 const desktopUsageInsert = `INSERT OR IGNORE INTO desktop_token_usage(job_id,day,module,model,prompt_tokens,completion_tokens,total_tokens)
  SELECT id, strftime('%Y-%m-%d',COALESCE(?,created_at),'unixepoch','+8 hours'),
- CASE json_extract(body,'$.purpose') WHEN 'stock_research' THEN 'stock-analysis' WHEN 'bridge_test' THEN 'settings-bridge-test' ELSE 'ai-chat' END,
+ CASE WHEN json_extract(body,'$.bridge_test')=1 OR json_extract(body,'$.purpose')='bridge_test' THEN 'settings-bridge-test' WHEN json_extract(body,'$.purpose')='stock_research' THEN 'stock-analysis' ELSE 'ai-chat' END,
  COALESCE(json_extract(result,'$.model'),json_extract(body,'$.model'),''),
  COALESCE(json_extract(result,'$.token_usage.inputTokens'),0),
  COALESCE(json_extract(result,'$.token_usage.outputTokens'),0),
