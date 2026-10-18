@@ -1,3 +1,4 @@
+import { desktopModelGroups, selectedDesktopModelGroup, resolveDesktopModelSelection } from '../lib/desktop-model-groups';
 import {prepareDesktopChatRuntime,loadChatRuntime,saveChatRuntime,streamDesktopChat,isDesktopChatProvider,desktopChatProviderLabel,type ChatRuntime} from '../lib/desktop-chat';
 import {shortBridgeIdentity} from '../lib/linkage-display';
 import {useAutoRefresh} from '../lib/use-auto-refresh';
@@ -329,12 +330,19 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 		} catch (error) { setModelSwitchState('error'); setModelSwitchMessage(error instanceof Error ? error.message : '切换模型配置失败'); }
 	};
 
+	const groupedDesktopModels = desktopModelGroups(desktopRuntime?.models || [], desktopRuntime?.config.provider || '');
+	const selectedDesktopGroup = selectedDesktopModelGroup(groupedDesktopModels, desktopRuntime?.config.model || '');
 	const switchChatRuntime = async (change: Partial<ChatRuntime['config']>) => {
   if (!config || !desktopRuntime || sending || modelSwitchState === 'switching') return;
   setModelSwitchState('switching'); setModelSwitchMessage('正在保存对话配置…');
   try {
    let next = {...desktopRuntime.config,...change};
-   if (isDesktopChatProvider(next.provider)) next = await prepareDesktopChatRuntime(config,next,next.provider);
+   if (isDesktopChatProvider(next.provider)) {
+    const provider = next.provider;
+    const selected = resolveDesktopModelSelection(desktopRuntime.models, provider, next.model, next.reasoning_effort);
+    if (selected) next = {...next, ...selected};
+    next = await prepareDesktopChatRuntime(config,next,provider);
+   }
    const moved=isDesktopChatProvider(next.provider)&&(next.node_id!==desktopRuntime.config.node_id||next.workspace_id!==desktopRuntime.config.workspace_id);
    await saveChatRuntime(config,next); await loadModel();
    setModelSwitchState('saved'); setModelSwitchMessage(moved?'已自动选择活跃桥 '+shortBridgeIdentity(next.node_id,next.workspace_id)+'，下一条消息生效。':'已保存，刷新后自动恢复；下一条消息生效。');
@@ -626,7 +634,7 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 					</div>
 					<div className="ai-conversation-tools">{desktopRuntime&&<label>接入<select aria-label="对话接入方式" value={desktopRuntime.config.provider} disabled={sending || modelSwitchState === 'switching'} onChange={e=>void switchChatRuntime({provider:e.target.value as ChatRuntime['config']['provider']})}><option value="hermes">Hermes</option><option value="codex_desktop">桌面 Codex</option><option value="antigravity_desktop">桌面 Antigravity</option></select></label>}
 						<div className="ai-chat-reasoning-picker">
-							{isDesktopChatProvider(desktopRuntime?.config.provider)?<label>推理强度<select aria-label="对话推理强度" value={desktopRuntime.config.reasoning_effort} disabled={sending || modelSwitchState === 'switching'} onChange={e=>void switchChatRuntime({reasoning_effort:e.target.value})}>{desktopRuntime.models.find(m=>m.id===desktopRuntime.config.model)?.efforts.map(e=><option key={e}>{e}</option>)}</select></label>:<ReasoningControl config={config} refreshKey={JSON.stringify([llmConfig, activeLLMProfileID, refreshKey, modelListState, modelSwitchState === 'switching'])} disabled={sending || modelSwitchState === 'switching'} onSaved={() => setConversations((current) => clearHermesSessionIDs(current))} />}
+							{isDesktopChatProvider(desktopRuntime?.config.provider)?<label>推理强度<select aria-label="对话推理强度" value={desktopRuntime.config.reasoning_effort} disabled={sending || modelSwitchState === 'switching'} onChange={e=>void switchChatRuntime({reasoning_effort:e.target.value})}>{selectedDesktopGroup?.efforts.map(e=><option key={e}>{e}</option>)}</select></label>:<ReasoningControl config={config} refreshKey={JSON.stringify([llmConfig, activeLLMProfileID, refreshKey, modelListState, modelSwitchState === 'switching'])} disabled={sending || modelSwitchState === 'switching'} onSaved={() => setConversations((current) => clearHermesSessionIDs(current))} />}
 						</div>
 						<div className={`ai-chat-model-picker ${modelListState} ${manualModelEditing ? 'manual' : ''}`} title={modelListMessage || '选择当前 AI 对话使用的模型'}>
 							<span>模型</span>
@@ -638,9 +646,9 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 								</>
 							) : (
 								<>
-									<select aria-label="选择对话模型" value={llmConfig?.model || ''} onChange={(event) => chooseModel(event.target.value)} disabled={!config || !llmConfig || sending || modelSwitchState === 'switching' || modelListState === 'loading'}>
+									<select aria-label="选择对话模型" value={isDesktopChatProvider(desktopRuntime?.config.provider) ? selectedDesktopGroup?.id || llmConfig?.model || '' : llmConfig?.model || ''} onChange={(event) => chooseModel(event.target.value)} disabled={!config || !llmConfig || sending || modelSwitchState === 'switching' || modelListState === 'loading'}>
 										{!selectableModels.length && <option value="">{modelListState === 'loading' ? '读取模型中…' : '暂无可选模型'}</option>}
-										{selectableModels.map((option) => <option value={option.id} key={option.id}>{modelOptionLabel(option)}</option>)}
+										{isDesktopChatProvider(desktopRuntime?.config.provider) ? groupedDesktopModels.map(group => <option value={group.id} key={group.id}>{group.name || group.id}</option>) : selectableModels.map((option) => <option value={option.id} key={option.id}>{modelOptionLabel(option)}</option>)}
 										{llmConfig && <option disabled={isDesktopChatProvider(desktopRuntime?.config.provider)} value={manualModelOption}>手动输入其他模型…</option>}
 									</select>
 									{modelSwitchState === 'switching' && <LoaderCircle className="spin" size={14} />}

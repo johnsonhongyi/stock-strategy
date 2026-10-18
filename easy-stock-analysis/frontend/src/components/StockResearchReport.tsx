@@ -37,9 +37,9 @@ function ResearchTiming({ job }: { job: ResearchJob }) {
 	const seconds = (value: number | null) => value === null ? '未采集' : `${(value / 1000).toFixed(2)} 秒`;
 	const labels: Record<string, string> = { quick: '快速研判', outline: '问题梳理', core: '核心判断', trade: '条件整理', repair: '结构修复' };
 	return <details className="stock-research-timing"><summary>耗时分解 · AI调用 {seconds(timing.calls)} · 资料与校验 {seconds(timing.preparation)}</summary>
-		<p>服务端总耗时 {seconds(timing.total)}。AI调用包含排队、桥准备、Codex等待与输出、结果回传；不等于纯推理耗时。</p>
+		<p>服务端总耗时 {seconds(timing.total)}。AI调用包含排队、桥准备、模型等待与输出、结果回传；不等于纯推理耗时。</p>
 		{timing.attempts.map((attempt, index) => <div key={index}><strong>{labels[attempt.stage] || attempt.stage} · {seconds(attempt.call)}</strong>
-			{attempt.setup !== null ? <p>排队 {seconds(attempt.queue)} · 桥准备 {seconds(attempt.setup)} · Codex等待首段 {seconds(attempt.waiting)} · 输出 {seconds(attempt.output)} · 其余调用链路 {seconds(attempt.other)}</p> : <p>历史记录未采集桥分段计时。</p>}
+			{attempt.setup !== null ? <p>排队 {seconds(attempt.queue)} · 桥准备 {seconds(attempt.setup)} · 模型等待首段 {seconds(attempt.waiting)} · 输出 {seconds(attempt.output)} · 其余调用链路 {seconds(attempt.other)}</p> : <p>历史记录未采集桥分段计时。</p>}
 			{attempt.tokens && <p>输入 {attempt.tokens.inputTokens ?? '未采集'} token · 缓存命中 {attempt.tokens.cachedInputTokens ?? '未采集'} · 推理 {attempt.tokens.reasoningOutputTokens ?? '未采集'}</p>}
 		</div>)}
 	</details>;

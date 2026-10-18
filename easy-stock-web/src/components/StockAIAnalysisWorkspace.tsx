@@ -1,3 +1,4 @@
+import { desktopModelGroups, selectedDesktopModelGroup, resolveDesktopModelSelection } from '../lib/desktop-model-groups';
 import { startAutoRefresh, useAutoRefresh } from '../lib/use-auto-refresh';
 import { ReasoningControl } from './ReasoningControl';
 import {
@@ -332,16 +333,19 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 	};
 
 	const changeCodexModel = (model: string) => {
-		const selected = desktopRuntime?.models.find((item) => item.id === model);
-		const effort = selected?.efforts.includes(codexEffort) ? codexEffort : selected?.efforts[0] || '';
-		setCodexModel(model);
-		setCodexEffort(effort);
-		saveStockAIModelPreference(analysisProvider, model, effort, codexTarget);
+		const selected = resolveDesktopModelSelection(desktopRuntime?.models || [], analysisProvider, model, codexEffort);
+		if (!selected) return;
+		setCodexModel(selected.model);
+		setCodexEffort(selected.reasoning_effort);
+		saveStockAIModelPreference(analysisProvider, selected.model, selected.reasoning_effort, codexTarget);
 	};
 
 	const changeCodexEffort = (reasoning_effort: string) => {
-		setCodexEffort(reasoning_effort);
-		saveStockAIModelPreference(analysisProvider, codexModel, reasoning_effort, codexTarget);
+		const selected = resolveDesktopModelSelection(desktopRuntime?.models || [], analysisProvider, codexModel, reasoning_effort);
+		if (!selected) return;
+		setCodexModel(selected.model);
+		setCodexEffort(selected.reasoning_effort);
+		saveStockAIModelPreference(analysisProvider, selected.model, selected.reasoning_effort, codexTarget);
 	};
 	const switchResearchModel = async (profileID: string) => {
 		if (!config || !profileID || profileID === activeLLMProfileID || aiChoiceBusy) return;
@@ -856,13 +860,14 @@ function AnalysisSearch({ query, mode, directory, directoryState, onQuery, onSub
 		: directoryState === 'error'
 			? '目录暂不可用，可直接输入6位代码'
 			: `${directoryState === 'cached' ? '本机缓存' : '已缓存'} ${directory.length.toLocaleString('zh-CN')} 只A股 · 名称/代码均可搜索`;
-	const selectedDesktopModel = desktopRuntime?.models.find((model) => model.id === codexModel);
+	const modelGroups = desktopModelGroups(desktopRuntime?.models || [], analysisProvider);
+	const selectedDesktopModel = selectedDesktopModelGroup(modelGroups, codexModel);
 	return (
 		<header className="stock-ai-search-hero">
 			<div className="stock-ai-research-options">
 				<label><span>引擎</span><select value={analysisProvider} onChange={(event) => onProviderChange(event.target.value as StockAIProvider)} disabled={choiceBusy || loading} aria-label="个股分析引擎"><option value="hermes">Hermes</option><option value="codex_desktop" disabled={!desktopRuntime?.online || !desktopRuntime.models.length}>桌面 Codex{desktopRuntime?.online ? '' : '（离线）'}</option><option value="antigravity_desktop" disabled={!desktopRuntime?.online || !desktopRuntime.models.length}>桌面 Antigravity{desktopRuntime?.online ? '' : '（离线）'}</option></select></label>
 				{(analysisProvider === 'codex_desktop' || analysisProvider === 'antigravity_desktop') ? <>
-					<label><span>模型</span><select value={codexModel} onChange={(event) => onCodexModelChange(event.target.value)} disabled={choiceBusy || loading || !desktopRuntime?.online || !desktopRuntime.models.length} aria-label="桌面个股分析模型">{!desktopRuntime?.models.some((model) => model.id === codexModel) && <option value={codexModel}>{codexModel || '等待桌面模型目录'}</option>}{desktopRuntime?.models.map((model) => <option value={model.id} key={model.id}>{model.name || model.id}</option>)}</select></label>
+					<label><span>模型</span><select value={selectedDesktopModel?.id || codexModel} onChange={(event) => onCodexModelChange(event.target.value)} disabled={choiceBusy || loading || !desktopRuntime?.online || !desktopRuntime.models.length} aria-label="桌面个股分析模型">{!selectedDesktopModel && <option value={codexModel}>{codexModel || '等待桌面模型目录'}</option>}{modelGroups.map((model) => <option value={model.id} key={model.id}>{model.name || model.id}</option>)}</select></label>
 					<label><span>思考</span>{selectedDesktopModel?.efforts.length ? <select value={codexEffort} onChange={(event) => onCodexEffortChange(event.target.value)} disabled={choiceBusy || loading || !desktopRuntime?.online} aria-label="桌面个股分析思考强度">{selectedDesktopModel.efforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}</select> : <small className="stock-ai-reasoning-unavailable">当前模型未提供思考等级选项</small>}</label>
 					<small className="stock-ai-runtime-notice">{codexBridgeNotice || (desktopRuntime?.online ? `个股策略桥 ${codexTargetLabel}；与 AI 对话桥选择独立。` : '没有在线且支持个股研究的桌面桥。')}</small>
 				</> : <>
