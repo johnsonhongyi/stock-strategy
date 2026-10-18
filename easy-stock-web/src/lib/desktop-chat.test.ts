@@ -1,9 +1,10 @@
 import {afterEach,describe,expect,it,vi} from 'vitest';
-import {streamDesktopChat,saveChatRuntime,loadChatRuntime} from './desktop-chat';
+import {streamDesktopChat,saveChatRuntime,loadChatRuntime,prepareDesktopChatRuntime,testDesktopChatBridge,type AvailableDesktopChatTarget} from './desktop-chat';
 const config={backendUrl:'http://127.0.0.1:20084',token:'test-only'};
 const response=(data:unknown)=>new Response(JSON.stringify({data}),{status:200,headers:{'Content-Type':'application/json'}});
+const rawResponse=(data:unknown)=>new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});
 afterEach(()=>vi.unstubAllGlobals());
-describe('desktop Codex conversation adapter',()=>{
+describe('desktop bridge conversation adapter',()=>{
  it('queries the strategy capability without changing the saved chat runtime',async()=>{
   const fetch=vi.fn().mockResolvedValue(response({online:true,models:[]}));vi.stubGlobal('fetch',fetch);
   await loadChatRuntime(config,'desk','ws','strategy_research');
@@ -29,5 +30,33 @@ describe('desktop Codex conversation adapter',()=>{
   const fetch=vi.fn().mockResolvedValue(response({}));vi.stubGlobal('fetch',fetch);
   await saveChatRuntime(config,{provider:'codex_desktop',node_id:'node',workspace_id:'workspace',model:'luna',reasoning_effort:'low'});
   const body=JSON.parse(fetch.mock.calls[0][1].body);expect(body.provider).toBe('codex_desktop');expect(body).not.toHaveProperty('api_key');
+ });
+ it('keeps Antigravity selection on an online AGV target even when Codex is the default workspace',async()=>{
+  const fetch=vi.fn().mockImplementation((input:RequestInfo|URL)=>{
+   const url=String(input);
+   if(url.includes('/api/v1/linkage/targets'))return rawResponse({default_node_id:'codex-main',targets:[
+    {node_id:'codex-main',workspace_id:'ws-codex',label:'Codex'},
+    {node_id:'agv-main',workspace_id:'ws-agv',label:'Antigravity'},
+   ]});
+   const antigravity=url.includes('node_id=agv-main');
+   const model=antigravity?'gemini-3.8-flash':'gpt-6-luna';
+   return response({config:{provider:'codex_desktop',node_id:'codex-main',workspace_id:'ws-codex',model:'gpt-6-luna',reasoning_effort:'low'},online:true,models:[{id:model,name:model,efforts:['low','high']}],message:''});
+  });vi.stubGlobal('fetch',fetch);
+  const current={provider:'antigravity_desktop' as const,node_id:'',workspace_id:'',model:'gemini-3.8-flash',reasoning_effort:'high'};
+  const selected=await prepareDesktopChatRuntime(config,current,'antigravity_desktop');
+  expect(selected).toMatchObject({provider:'antigravity_desktop',node_id:'agv-main',workspace_id:'ws-agv',model:'gemini-3.8-flash',reasoning_effort:'high'});
+ });
+ it('does not silently substitute Codex when no Antigravity bridge is available',async()=>{
+  const fetch=vi.fn().mockImplementation((input:RequestInfo|URL)=>{
+   if(String(input).includes('/api/v1/linkage/targets'))return rawResponse({default_node_id:'codex-main',targets:[{node_id:'codex-main',workspace_id:'ws-codex',label:'Codex'}]});
+   return response({config:{provider:'codex_desktop',node_id:'codex-main',workspace_id:'ws-codex',model:'gpt-6-luna',reasoning_effort:'low'},online:true,models:[{id:'gpt-6-luna',name:'Codex',efforts:['low']}],message:''});
+  });vi.stubGlobal('fetch',fetch);
+  await expect(prepareDesktopChatRuntime(config,{provider:'antigravity_desktop',node_id:'',workspace_id:'',model:'gemini-3.8-flash',reasoning_effort:'low'},'antigravity_desktop')).rejects.toThrow('Antigravity');
+ });
+ it('checks for the Antigravity marker on an AGV bridge test',async()=>{
+  const target:AvailableDesktopChatTarget={node_id:'agv-main',workspace_id:'ws-agv',label:'Antigravity',provider:'antigravity_desktop',runtime:{config:{provider:'antigravity_desktop',node_id:'agv-main',workspace_id:'ws-agv',model:'gemini-3.8-flash',reasoning_effort:'low'},online:true,models:[{id:'gemini-3.8-flash',name:'Gemini 3.8 Flash',efforts:['low']}],message:''}};
+  const fetch=vi.fn().mockResolvedValueOnce(response(target.runtime)).mockResolvedValueOnce(response({id:'job',session_id:'test',status:'completed',result:{content:'ANTIGRAVITY_BRIDGE_OK'}})).mockResolvedValueOnce(response({}));vi.stubGlobal('fetch',fetch);
+  await expect(testDesktopChatBridge(config,target,'gemini-3.8-flash','low',vi.fn())).resolves.toContain('Antigravity回复');
+  expect(JSON.parse(fetch.mock.calls[1][1].body)).toMatchObject({bridge_test:true,node_id:'agv-main',workspace_id:'ws-agv'});
  });
 });

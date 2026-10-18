@@ -492,7 +492,7 @@ func TestLinkageDefaultPersistsAndRejectsUnknownNode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "key.bin"), []byte(strings.Repeat("k", 32)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(`{"targets":[{"node_id":"tk-1","workspace_id":"desk","label":"JohnsonTriton","base_url":"http://127.0.0.1:26676","key_file":"key.bin","enabled":true}]}`), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"targets":[{"node_id":"tk-1","workspace_id":"desk","label":"JohnsonTriton","base_url":"http://127.0.0.1:26676","key_file":"key.bin","enabled":true},{"node_id":"agv-1","workspace_id":"agv-workspace","label":"Antigravity","base_url":"http://127.0.0.1:26677","key_file":"key.bin","enabled":true},{"node_id":"codex-1","workspace_id":"codex-workspace","label":"Codex","base_url":"http://127.0.0.1:26678","key_file":"key.bin","enabled":true}]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	service, err := linkage.NewService(filepath.Join(root, "linkage.db"), path)
@@ -539,6 +539,19 @@ func TestLinkageDefaultPersistsAndRejectsUnknownNode(t *testing.T) {
 	server.ServeHTTP(rec, req)
 	if !strings.Contains(rec.Body.String(), `"default_node_id":"tk-1"`) {
 		t.Fatalf("read: %s", rec.Body.String())
+	}
+	var targetResponse struct {
+		Targets []map[string]string `json:"targets"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &targetResponse); err != nil {
+		t.Fatalf("decode targets: %v", err)
+	}
+	providers := make(map[string]string, len(targetResponse.Targets))
+	for _, target := range targetResponse.Targets {
+		providers[target["node_id"]] = target["provider"]
+	}
+	if providers["agv-1"] != "antigravity_desktop" || providers["codex-1"] != "codex_desktop" || providers["tk-1"] != "unknown" {
+		t.Fatalf("target providers were not identified safely: %#v", providers)
 	}
 	if rec := request(`{"node_id":""}`, "test-token"); rec.Code != 200 || store.Snapshot().LinkageDefaultNodeID != "" {
 		t.Fatal("clear failed")

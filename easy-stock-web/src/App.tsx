@@ -31,6 +31,7 @@ import {
 	ShieldCheck,
 	Sun,
 	Target,
+	UserRound,
 	Wifi,
 	WalletCards,
 } from 'lucide-react';
@@ -428,6 +429,7 @@ export function App() {
 				<div className="sidebar-bottom-actions">
 					<button type="button" className={`sidebar-settings ${workspaceMode === 'token-usage' ? 'active' : ''}`} onClick={() => switchWorkspace('token-usage')} aria-label="打开Token统计" title="Token统计"><BarChart3 size={17} />{sidebarExpanded && <span>Token统计</span>}</button>
 					<button type="button" className="sidebar-settings" onClick={() => setSettingsOpen(true)} aria-label="打开系统设置" title="系统设置"><Settings size={17} />{sidebarExpanded && <span>系统设置</span>}</button>
+					<button type="button" className="sidebar-settings" onClick={() => window.dispatchEvent(new Event('stock-open-account-manager'))} aria-label="打开账号管理" title="账号管理"><UserRound size={17} />{sidebarExpanded && <span>账号管理</span>}</button>
 					<button type="button" className="sidebar-toggle" onClick={() => setSidebarExpanded((value) => !value)} aria-label={sidebarExpanded ? '收起侧边栏' : '展开侧边栏'}>{sidebarExpanded ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />} {sidebarExpanded && <span>收起侧栏</span>}</button>
 				</div>
 			</aside>

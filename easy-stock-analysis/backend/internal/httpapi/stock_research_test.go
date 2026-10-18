@@ -13,6 +13,15 @@ import (
 	"easy-stock/backend/internal/stockanalysis"
 )
 
+func TestDesktopResearchBridgeLabel(t *testing.T) {
+	if got := desktopResearchBridgeLabel("codex_desktop"); got != "Codex Desktop" {
+		t.Fatalf("Codex label = %q", got)
+	}
+	if got := desktopResearchBridgeLabel("antigravity_desktop"); got != "Antigravity Desktop" {
+		t.Fatalf("Antigravity label = %q", got)
+	}
+}
+
 func TestResearchAPIHistorySnapshotAndReportBoundChat(t *testing.T) {
 	gateway := &fakeHermesGateway{status: hermes.Status{Available: true, Configured: true}, promptFunc: func(_ context.Context, prompt string) (hermes.PromptResult, error) {
 		if strings.Contains(prompt, "独立提出需要核实的问题") {

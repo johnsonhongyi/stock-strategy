@@ -1,7 +1,7 @@
 import type { StockAIAnalysis } from './backend';
 
 export type ResearchAnalysisLevel = 'quantitative' | 'quick' | 'standard' | 'deep';
-export type ResearchRequest = { symbol: string; purpose: 'observe' | 'new_position' | 'holding'; horizon: 'short' | 'swing' | 'medium'; cost_price?: number; analysis_level?: ResearchAnalysisLevel; ai_provider?: 'hermes' | 'codex_desktop'; model?: string; reasoning_effort?: string; desktop_node_id?: string; desktop_workspace_id?: string };
+export type ResearchRequest = { symbol: string; purpose: 'observe' | 'new_position' | 'holding'; horizon: 'short' | 'swing' | 'medium'; cost_price?: number; analysis_level?: ResearchAnalysisLevel; ai_provider?: 'hermes' | 'codex_desktop' | 'antigravity_desktop'; model?: string; reasoning_effort?: string; desktop_node_id?: string; desktop_workspace_id?: string };
 export type ResearchSource = { id: string; kind: string; title: string; content: string; provider: string; url?: string; published_at?: string; captured_at: string; report_date?: string; time_status: string };
 export type ResearchClaim = { text: string; kind: string; source_ids: string[]; quote?: string };
 export type ResearchCondition = { id: string; text: string; metric: string; operator: string; anchor_id?: string; threshold?: number; window: string; source_ids: string[]; status: string };

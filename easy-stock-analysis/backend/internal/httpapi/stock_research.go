@@ -60,7 +60,7 @@ func (s *Server) runStockResearch(ctx context.Context, request stockanalysis.Res
 	modelIdentity := ""
 	var desktopPrompter *stockResearchCodexPrompter
 	var promptGateway hermes.Prompter
-	if request.AIProvider == "codex_desktop" {
+	if request.AIProvider == "codex_desktop" || request.AIProvider == "antigravity_desktop" {
 		var err error
 		desktopPrompter, err = s.newStockResearchCodexPrompter(request)
 		if err != nil {
@@ -69,7 +69,8 @@ func (s *Server) runStockResearch(ctx context.Context, request stockanalysis.Res
 			return stockanalysis.QuantitativeOnly(analysis), snapshot, nil
 		}
 		defer desktopPrompter.Close()
-		model = fmt.Sprintf("Codex Desktop · %s / %s", request.Model, request.ReasoningEffort)
+		prefix := desktopResearchBridgeLabel(request.AIProvider)
+		model = fmt.Sprintf("%s · %s / %s", prefix, request.Model, request.ReasoningEffort)
 		modelIdentity = desktopPrompter.identity
 		promptGateway = desktopPrompter
 	} else {

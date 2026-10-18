@@ -15,6 +15,13 @@ import (
 
 const stockResearchCodexPurpose = "stock_research"
 
+func desktopResearchBridgeLabel(provider string) string {
+	if provider == "antigravity_desktop" {
+		return "Antigravity Desktop"
+	}
+	return "Codex Desktop"
+}
+
 type stockResearchCodexPrompter struct {
 	server    *Server
 	db        *sql.DB
@@ -37,6 +44,9 @@ func (s *Server) stockResearchDesktopConfig(db *sql.DB, request stockanalysis.Re
 	if request.DesktopNodeID != "" {
 		cfg.Node, cfg.Workspace = request.DesktopNodeID, request.DesktopWorkspaceID
 	}
+	if (request.AIProvider == "codex_desktop" || request.AIProvider == "antigravity_desktop") && !desktopProviderMatchesNode(request.AIProvider, cfg.Node) {
+		return cfg, errors.New("个股研究桌面桥类型与节点不匹配")
+	}
 	if s.linkage == nil || !s.linkage.IsConfiguredTarget(cfg.Workspace, cfg.Node) {
 		return cfg, errors.New("Codex Desktop 个股研究桥未登记")
 	}
@@ -55,19 +65,23 @@ func (s *Server) stockResearchDesktopConfig(db *sql.DB, request stockanalysis.Re
 func (s *Server) stockResearchCodexIdentity(request stockanalysis.ResearchRequest) (string, error) {
 	db, err := s.desktopDB()
 	if err != nil {
-		return "", errors.New("Codex Desktop 运行时不可用")
+		return "", errors.New("桌面桥运行时不可用")
 	}
 	cfg, err := s.stockResearchDesktopConfig(db, request)
 	if err != nil {
 		return "", err
 	}
-	identity, _ := json.Marshal([]string{"codex_desktop", cfg.Node, cfg.Workspace, request.Model, request.ReasoningEffort})
+	provider := request.AIProvider
+	if provider == "" {
+		provider = "codex_desktop"
+	}
+	identity, _ := json.Marshal([]string{provider, cfg.Node, cfg.Workspace, request.Model, request.ReasoningEffort})
 	return string(identity), nil
 }
 func (s *Server) newStockResearchCodexPrompter(request stockanalysis.ResearchRequest) (*stockResearchCodexPrompter, error) {
 	db, err := s.desktopDB()
 	if err != nil {
-		return nil, errors.New("Codex Desktop 对话队列不可用")
+		return nil, errors.New("桌面桥对话队列不可用")
 	}
 	cfg, err := s.stockResearchDesktopConfig(db, request)
 	if err != nil {
@@ -75,13 +89,17 @@ func (s *Server) newStockResearchCodexPrompter(request stockanalysis.ResearchReq
 	}
 	session := chatID()
 	if session == "" {
-		return nil, errors.New("Codex Desktop 研究会话创建失败")
+		return nil, errors.New("桌面桥研究会话创建失败")
 	}
 	owner := "stock-research-" + session
 	if _, err = db.Exec("INSERT INTO desktop_chat_sessions(id,owner,node_id,workspace_id,model,effort) VALUES(?,?,?,?,?,?)", session, owner, cfg.Node, cfg.Workspace, request.Model, request.ReasoningEffort); err != nil {
-		return nil, errors.New("Codex Desktop 研究会话保存失败")
+		return nil, errors.New("桌面桥研究会话保存失败")
 	}
-	identity, _ := json.Marshal([]string{"codex_desktop", cfg.Node, cfg.Workspace, request.Model, request.ReasoningEffort})
+	provider := request.AIProvider
+	if provider == "" {
+		provider = "codex_desktop"
+	}
+	identity, _ := json.Marshal([]string{provider, cfg.Node, cfg.Workspace, request.Model, request.ReasoningEffort})
 	return &stockResearchCodexPrompter{
 		server: s, db: db, request: request, model: request.Model, effort: request.ReasoningEffort,
 		node: cfg.Node, workspace: cfg.Workspace, owner: owner, session: session, identity: string(identity),
@@ -193,7 +211,7 @@ func (p *stockResearchCodexPrompter) PromptWithOptions(ctx context.Context, prom
 				ErrorCode string `json:"error_code"`
 			}
 			_ = json.Unmarshal([]byte(raw), &result)
-			return hermes.PromptResult{}, fmt.Errorf("Codex Desktop 研究失败：%s", firstNonEmpty(result.ErrorCode, "模型调用失败"))
+			return hermes.PromptResult{}, fmt.Errorf("%s 研究失败：%s", desktopResearchBridgeLabel(p.request.AIProvider), firstNonEmpty(result.ErrorCode, "模型调用失败"))
 		case "expired", "cancelled":
 			return hermes.PromptResult{}, fmt.Errorf("Codex Desktop 研究任务%s", status)
 		}

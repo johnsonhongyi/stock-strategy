@@ -40,16 +40,16 @@ func NormalizeResearchRequest(request ResearchRequest) (ResearchRequest, error) 
 	switch request.AIProvider {
 	case "hermes":
 		if request.Model != "" || request.ReasoningEffort != "" {
-			return request, fmt.Errorf("model and reasoning_effort are only valid for codex_desktop")
+			return request, fmt.Errorf("model and reasoning_effort are only valid for desktop bridges")
 		}
-	case "codex_desktop":
+	case "codex_desktop", "antigravity_desktop":
 		request.Model = strings.TrimSpace(request.Model)
 		request.ReasoningEffort = strings.TrimSpace(request.ReasoningEffort)
 		if request.Model == "" || len(request.Model) > 128 || strings.ContainsAny(request.Model, "\r\n\x00") || request.ReasoningEffort == "" || len(request.ReasoningEffort) > 32 || strings.ContainsAny(request.ReasoningEffort, "\r\n\x00") {
-			return request, fmt.Errorf("codex_desktop requires a valid model and reasoning_effort")
+			return request, fmt.Errorf("%s requires a valid model and reasoning_effort", request.AIProvider)
 		}
 	default:
-		return request, fmt.Errorf("ai_provider must be hermes or codex_desktop")
+		return request, fmt.Errorf("ai_provider must be hermes, codex_desktop or antigravity_desktop")
 	}
 	if request.Purpose == "" {
 		request.Purpose = "observe"

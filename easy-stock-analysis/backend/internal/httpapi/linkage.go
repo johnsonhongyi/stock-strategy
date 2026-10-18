@@ -28,6 +28,14 @@ func (s *Server) linkageTargets(w http.ResponseWriter, r *http.Request) {
 	}
 	response["chat_target"] = map[string]string{"provider": "unknown"}
 	for _, target := range targets {
+		switch {
+		case strings.HasPrefix(strings.ToLower(target["node_id"]), "agv-"):
+			target["provider"] = "antigravity_desktop"
+		case strings.HasPrefix(strings.ToLower(target["node_id"]), "codex-"):
+			target["provider"] = "codex_desktop"
+		default:
+			target["provider"] = "unknown"
+		}
 		target["online"] = "false"
 		target["desktop_status"] = "status_unavailable"
 		target["chat_queued"] = "0"

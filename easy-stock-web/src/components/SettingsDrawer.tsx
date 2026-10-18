@@ -471,7 +471,7 @@ export function SettingsDrawer({ config, open, onClose, onSaved }: Props) {
 		<div className="settings-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
 			<aside className="settings-drawer" role="dialog" aria-modal="true" aria-label="系统设置">
 				<header className="settings-header">
-					<div><span>AI RUNTIMES</span><h2>系统设置</h2><p>管理 Hermes / 桌面 Codex 接入方式与外部数据源凭据</p></div>
+					<div><span>AI RUNTIMES</span><h2>系统设置</h2><p>管理 Hermes / Codex / Antigravity 接入方式与外部数据源凭据</p></div>
 					<button type="button" onClick={onClose} aria-label="关闭设置"><X size={20} /></button>
 				</header>
 
@@ -489,7 +489,7 @@ export function SettingsDrawer({ config, open, onClose, onSaved }: Props) {
 						<HermesAgentSettingsPanel config={config} open={open} />
 
 						<section className="settings-section">
-							<div className="settings-section-title"><Bot size={18} /><div><h3>Hermes 模型运行时</h3><p>Hermes 的模型探针、技能及复盘功能使用此配置；AI 对话可独立选择桌面 Codex。</p></div></div>
+							<div className="settings-section-title"><Bot size={18} /><div><h3>Hermes 模型运行时</h3><p>Hermes 的模型探针、技能及复盘功能使用此配置；AI 对话可独立选择桌面 Codex 或 Antigravity。</p></div></div>
 							<div className={`llm-connection-test ${settings?.hermes.available ? settings.hermes.configured ? 'success' : '' : 'error'}`}>
 								<div><Bot size={17} /><span><strong>{settings?.hermes.available ? `Hermes ${settings.hermes.version || 'Runtime'} 已安装` : 'Hermes 运行时不可用'}</strong><small>{settings?.hermes.message || (settings?.hermes.configured ? '运行时和模型配置均已就绪。' : '运行时已就绪，请继续配置模型连接。')}</small></span></div>
 							</div>

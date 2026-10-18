@@ -2,7 +2,7 @@ import {requestJSON,type BackendConfig} from './backend';
 import type {HermesStreamRequest,HermesStreamResult} from './hermes';
 import {streamTaskSnapshots} from './task-events';
 
-export type ChatRuntimeConfig={provider:'hermes'|'codex_desktop';node_id:string;workspace_id:string;model:string;reasoning_effort:string};
+export type ChatRuntimeConfig={provider:'hermes'|'codex_desktop'|'antigravity_desktop';node_id:string;workspace_id:string;model:string;reasoning_effort:string};
 export type DesktopChatCapability='ai_chat_v1'|'stock_research_v1';
 export type ChatRuntime={config:ChatRuntimeConfig;online:boolean;models:Array<{id:string;name:string;efforts:string[]}>;message:string};
 export type AvailableDesktopChatTarget={node_id:string;workspace_id:string;label:string;runtime:ChatRuntime};
@@ -31,12 +31,13 @@ export async function prepareDesktopChatRuntime(config: BackendConfig, current: 
  const target=candidates[0];
  if(target){
   const model=target.runtime.models.find(model=>model.id===current.model)||target.runtime.models[0];
-  return {...current,provider:'codex_desktop',node_id:target.node_id,workspace_id:target.workspace_id,model:model.id,reasoning_effort:model.efforts.includes(current.reasoning_effort)?current.reasoning_effort:model.efforts[0]};
+  const provider=target.node_id.startsWith('agv-')||current.provider==='antigravity_desktop'?'antigravity_desktop':'codex_desktop';
+  return {...current,provider,node_id:target.node_id,workspace_id:target.workspace_id,model:model.id,reasoning_effort:model.efforts.includes(current.reasoning_effort)?current.reasoning_effort:model.efforts[0]};
  }
  if(available.preferredWorkspaceID){
-  throw new Error('默认 ATS 工作区 '+available.preferredWorkspaceID+' 没有在线且有可用模型的 Codex 桥'+(available.otherAvailableCount?'；其他工作区的桥已忽略':'')+'。');
+  throw new Error('默认 ATS 工作区 '+available.preferredWorkspaceID+' 没有在线且有可用模型的桌面桥'+(available.otherAvailableCount?'；其他工作区的桥已忽略':'')+'。');
  }
- throw new Error('没有支持 AI 对话的在线 Codex 桌面，请检查桌面桥状态。');
+ throw new Error('没有支持 AI 对话的在线桌面桥，请检查桌面桥状态。');
 }
 export async function saveChatRuntime(config:BackendConfig,value:ChatRuntimeConfig){
  return (await requestChatJSON<{data:ChatRuntime}>(config,'/api/v1/ai/runtime',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)})).data;

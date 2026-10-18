@@ -3,49 +3,63 @@ import type {HermesStreamRequest,HermesStreamResult} from './hermes';
 import {bridgeTargetLabel} from './linkage-display';
 import {streamTaskSnapshots} from './task-events';
 
-export type ChatRuntimeConfig={provider:'hermes'|'codex_desktop';node_id:string;workspace_id:string;model:string;reasoning_effort:string};
+export type DesktopChatProvider='codex_desktop'|'antigravity_desktop';
+export type ChatRuntimeConfig={provider:'hermes'|DesktopChatProvider;node_id:string;workspace_id:string;model:string;reasoning_effort:string};
 export type DesktopChatCapability='ai_chat_v1'|'stock_research_v1'|'strategy_research';
 export type ChatRuntime={config:ChatRuntimeConfig;online:boolean;models:Array<{id:string;name:string;efforts:string[]}>;message:string};
-export type AvailableDesktopChatTarget={node_id:string;workspace_id:string;label:string;runtime:ChatRuntime};
+export type AvailableDesktopChatTarget={node_id:string;workspace_id:string;label:string;provider:DesktopChatProvider;runtime:ChatRuntime};
+export function isDesktopChatProvider(provider?:string):provider is DesktopChatProvider{return provider==='codex_desktop'||provider==='antigravity_desktop';}
+export function desktopChatProviderLabel(provider:DesktopChatProvider){return provider==='antigravity_desktop'?'桌面 Antigravity':'桌面 Codex';}
+function normalizeDesktopChatProvider(value?:string):DesktopChatProvider|null{
+ const normalized=String(value||'').trim().toLowerCase();
+ if(normalized.includes('antigravity')||normalized.startsWith('agv-'))return 'antigravity_desktop';
+ if(normalized.includes('codex')||normalized.startsWith('codex-'))return 'codex_desktop';
+ return null;
+}
+function providerForTarget(target:{node_id:string;provider?:string},runtime?:ChatRuntime|null){
+ return normalizeDesktopChatProvider(target.provider)||normalizeDesktopChatProvider(target.node_id)||normalizeDesktopChatProvider(runtime?.config.provider||'');
+}
+export function targetsForDesktopProvider(targets:AvailableDesktopChatTarget[],provider:DesktopChatProvider){return targets.filter(target=>target.provider===provider);}
 export async function loadChatRuntime(config:BackendConfig,node_id='',workspace_id='',capability:DesktopChatCapability='ai_chat_v1'){
  const params=new URLSearchParams();if(node_id){params.set('node_id',node_id);params.set('workspace_id',workspace_id);}if(capability!=='ai_chat_v1')params.set('capability',capability);
  const query=params.toString();
  return (await requestChatJSON<{data:ChatRuntime}>(config,'/api/v1/ai/runtime'+(query?'?'+query:''))).data;
 }
 export async function loadAvailableDesktopChatTargets(config:BackendConfig,capability:DesktopChatCapability='ai_chat_v1'){
- const result=await requestChatJSON<{targets:Array<{node_id:string;workspace_id:string;label:string}>;default_node_id?:string;strategy_target?:{node_id:string;workspace_id:string}}>(config,'/api/v1/linkage/targets');
+ const result=await requestChatJSON<{targets:Array<{node_id:string;workspace_id:string;label:string;provider?:string}>;default_node_id?:string;strategy_target?:{node_id:string;workspace_id:string}}>(config,'/api/v1/linkage/targets');
  const preferredWorkspaceID=result.targets.find(target=>target.node_id===result.default_node_id)?.workspace_id||'';
  const probed=await Promise.all(result.targets.map(async target=>{
   try{
    const runtime=await loadChatRuntime(config,target.node_id,target.workspace_id,capability);
    const usable=runtime.online&&runtime.models.some(model=>model.id&&model.efforts.length>0);
-   return {target,runtime,usable};
-  }catch{return {target,runtime:null,usable:false};}
+   return {target,runtime,usable,provider:providerForTarget(target,runtime)};
+  }catch{return {target,runtime:null,usable:false,provider:providerForTarget(target)};}
  }));
- const ready=probed.flatMap(entry=>entry.usable&&entry.runtime?[{...entry.target,runtime:entry.runtime}]:[]);
+ const ready:AvailableDesktopChatTarget[]=probed.flatMap(entry=>entry.usable&&entry.runtime&&entry.provider?[{...entry.target,provider:entry.provider,runtime:entry.runtime}]:[]);
  const targets=[...ready].sort((a,b)=>Number(b.workspace_id===preferredWorkspaceID)-Number(a.workspace_id===preferredWorkspaceID));
- return {targets,preferredWorkspaceID,strategyTarget:result.strategy_target||null,otherAvailableCount:0};
+ return {targets,preferredWorkspaceID,strategyTarget:result.strategy_target||null,otherAvailableCount:targets.length};
 }
-export async function prepareDesktopChatRuntime(config: BackendConfig, current: ChatRuntimeConfig): Promise<ChatRuntimeConfig> {
+export async function prepareDesktopChatRuntime(config: BackendConfig, current: ChatRuntimeConfig, provider:DesktopChatProvider=current.provider==='antigravity_desktop'?'antigravity_desktop':'codex_desktop'): Promise<ChatRuntimeConfig> {
  const available=await loadAvailableDesktopChatTargets(config);
- const candidates=[...available.targets].sort((a,b)=>
+ const candidates=targetsForDesktopProvider(available.targets,provider).sort((a,b)=>
   Number(b.node_id===current.node_id&&b.workspace_id===current.workspace_id)-Number(a.node_id===current.node_id&&a.workspace_id===current.workspace_id)
   || Number(b.workspace_id===available.preferredWorkspaceID)-Number(a.workspace_id===available.preferredWorkspaceID));
  const target=candidates[0];
  if(target){
   const model=target.runtime.models.find(model=>model.id===current.model)||target.runtime.models[0];
-  return {...current,provider:'codex_desktop',node_id:target.node_id,workspace_id:target.workspace_id,model:model.id,reasoning_effort:model.efforts.includes(current.reasoning_effort)?current.reasoning_effort:model.efforts[0]};
+  return {...current,provider,node_id:target.node_id,workspace_id:target.workspace_id,model:model.id,reasoning_effort:model.efforts.includes(current.reasoning_effort)?current.reasoning_effort:model.efforts[0]};
  }
+ const engine=desktopChatProviderLabel(provider).replace(/^桌面\s*/, '');
  if(available.preferredWorkspaceID){
-  throw new Error('默认 ATS 工作区 '+available.preferredWorkspaceID+' 没有在线且有可用模型的 Codex 桥'+(available.otherAvailableCount?'；其他工作区的桥已忽略':'')+'。');
+  throw new Error('默认 ATS 工作区 '+available.preferredWorkspaceID+' 没有在线且有可用模型的 '+engine+' 桥。');
  }
- throw new Error('没有支持 AI 对话的在线 Codex 桌面，请检查桌面桥状态。');
+ throw new Error('没有支持 AI 对话的在线 '+engine+' 桌面桥，请检查桥进程与模型目录。');
 }
 export async function saveChatRuntime(config:BackendConfig,value:ChatRuntimeConfig){
  return (await requestChatJSON<{data:ChatRuntime}>(config,'/api/v1/ai/runtime',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)})).data;
 }
 type ChatJob={id:string;session_id:string;status:string;stream_events?:boolean;result?:{content?:string;thread_id?:string;error_code?:string;model?:string;reasoning_effort?:string;stage?:string;elapsed_seconds?:number}};
-const bridgeStages:Record<string,string>={app_server_start:'正在启动本机 Codex 引擎…',project_setup:'正在准备 Codex 工作区…',thread_resume:'正在恢复 Codex 会话…',thread_start:'正在创建 Codex 会话…',thread_label:'正在标记检测会话…',turn_start:'Codex 已就绪，正在提交检测请求…',codex_reply:'Codex 正在生成检测回执…',result_cache:'Codex 已回复，正在保存本机回执…',result_writeback:'本机已保存回执，正在写回 Web 后端…'};
+const bridgeStages:Record<string,string>={app_server_start:'正在启动本机桌面引擎…',project_setup:'正在准备桌面工作区…',thread_resume:'正在恢复桌面会话…',thread_start:'正在创建桌面会话…',thread_label:'正在标记检测会话…',turn_start:'桌面引擎已就绪，正在提交检测请求…',codex_reply:'桌面引擎正在生成检测回执…',result_cache:'引擎已回复，正在保存本机回执…',result_writeback:'本机已保存回执，正在写回 Web 后端…'};
 export async function testDesktopChatBridge(config:BackendConfig,target:AvailableDesktopChatTarget,modelID:string,effort:string,onStatus:(message:string)=>void){
  let job:ChatJob|undefined;
  const startedAt=Date.now();let lastStatus='';
@@ -56,7 +70,9 @@ export async function testDesktopChatBridge(config:BackendConfig,target:Availabl
   const runtime=await loadChatRuntime(config,target.node_id,target.workspace_id);
   const model=runtime.models.find(item=>item.id===modelID);
   if(!runtime.online||!model?.id||!model.efforts.includes(effort))throw new Error('所选桥、模型或推理强度当前不可用。');
-  onStatus('桥在线，正在提交一次轻量 Codex 往返检测…');
+  const engine=desktopChatProviderLabel(target.provider).replace(/^桌面\s*/, '');
+  const expectedMarker=target.provider==='antigravity_desktop'?'ANTIGRAVITY_BRIDGE_OK':'CODEX_BRIDGE_OK';
+  onStatus('桥在线，正在提交一次轻量 '+engine+' 往返检测…');
   job=(await requestChatJSON<{data:ChatJob}>(config,'/api/v1/ai/desktop/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bridge_test:true,node_id:target.node_id,workspace_id:target.workspace_id,model:model.id,reasoning_effort:effort})})).data;
   onStatus('Web 后端已接收检测任务，等待该桥领取…');
   const deadline=Date.now()+180000,queuedDeadline=Date.now()+90000;
@@ -71,9 +87,9 @@ export async function testDesktopChatBridge(config:BackendConfig,target:Availabl
    if(job.status==='completed'){
     const content=job.result?.content||'';
     if(!content.trim())throw new Error('桥已回传空内容，检测未通过。');
-    if(!content.includes('CODEX_BRIDGE_OK'))throw new Error('请求已往返并收到 Codex 回执，但检测标记不匹配；请查看桥的任务日志。');
+    if(!content.includes(expectedMarker))throw new Error('请求已往返并收到 '+engine+' 回执，但检测标记不匹配；请查看桥的任务日志。');
     await cleanup();
-    return '全链路通过：Web提交 → 后端排队 → 桥领取 → Codex回复 → 回执写回。桥 '+bridgeTargetLabel(target)+'。';
+    return '全链路通过：Web提交 → 后端排队 → 桥领取 → '+engine+'回复 → 回执写回。桥 '+bridgeTargetLabel(target)+'。';
    }
    if(['failed','expired','cancelled'].includes(job.status))throw new Error(job.result?.error_code||('检测任务'+job.status));
    if(job.status==='queued'){
@@ -117,7 +133,7 @@ export async function streamDesktopChat(request:HermesStreamRequest):Promise<Her
     await streamTaskSnapshots<ChatJob>(request.config,'/api/v1/ai/desktop/jobs/'+job.id+'/events',value=>{
      job=value;const content=value.result?.content||'';
      if(content!==previous){previous=content;request.onDelta?.(content);}
-     request.onStatus?.({kind:'process',text:value.status==='queued'?'等待工作节点领取桌面 Codex 任务…':'桌面 Codex 正在回复…'});
+     request.onStatus?.({kind:'process',text:value.status==='queued'?'等待工作节点领取桌面桥任务…':'桌面桥正在回复…'});
      return ['completed','failed','expired','cancelled'].includes(value.status);
     },streamController.signal);
    }catch(error){if(request.signal?.aborted)throw error;if(typeof error==='object'&&error!==null&&'status'in error&&Number((error as {status:unknown}).status)<500)throw error;}
@@ -129,16 +145,16 @@ export async function streamDesktopChat(request:HermesStreamRequest):Promise<Her
    job=(await requestChatJSON<{data:ChatJob}>(request.config,'/api/v1/ai/desktop/jobs/'+job.id,{},request.signal)).data;
    const content=job.result?.content||'';
    if(content!==previous){previous=content;request.onDelta?.(content);}
-   request.onStatus?.({kind:'process',text:job.status==='queued'?'等待工作节点领取桌面 Codex 任务…':'桌面 Codex 正在回复…'});
+   request.onStatus?.({kind:'process',text:job.status==='queued'?'等待工作节点领取桌面桥任务…':'桌面桥正在回复…'});
    if(job.status==='completed'){
-    if(!content.trim())throw new Error('Codex未返回有效内容');
+    if(!content.trim())throw new Error('桌面桥未返回有效内容');
     return {content,hermesSessionID:job.session_id};
    }
    if(job.status==='queued'&&Date.now()>=queuedDeadline)throw new Error('桌面桥未领取任务。请确认 Web 与管理器中的节点 ID、工作区一致，且该桥在线。');
-   if(['failed','expired','cancelled'].includes(job.status))throw new Error(job.result?.error_code||(job.status==='expired'?'桌面桥任务已过期，请检查工作节点与工作区是否一致。':'Codex对话'+job.status));
+   if(['failed','expired','cancelled'].includes(job.status))throw new Error(job.result?.error_code||(job.status==='expired'?'桌面桥任务已过期，请检查工作节点与工作区是否一致。':'桌面桥对话'+job.status));
    await new Promise<void>((resolve,reject)=>{const stop=()=>{clearTimeout(timer);request.signal?.removeEventListener('abort',stop);reject(new DOMException('AI对话已停止','AbortError'));};const timer=setTimeout(()=>{request.signal?.removeEventListener('abort',stop);resolve();},2000);if(request.signal?.aborted)stop();else request.signal?.addEventListener('abort',stop,{once:true});});
   }
-  throw new Error('Codex对话等待超时');
+  throw new Error('桌面桥对话等待超时');
  }catch(error){
   const terminal=!!job&&['completed','failed','expired','cancelled'].includes(job.status);
   if(!terminal){

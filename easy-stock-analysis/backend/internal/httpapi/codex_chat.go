@@ -121,6 +121,17 @@ func validDesktopSelection(c desktopChatConfig, models []desktopChatModel) bool 
 	}
 	return false
 }
+func desktopProviderMatchesNode(provider, node string) bool {
+	isAntigravityNode := strings.HasPrefix(strings.ToLower(strings.TrimSpace(node)), "agv-")
+	switch provider {
+	case "codex_desktop":
+		return !isAntigravityNode
+	case "antigravity_desktop":
+		return isAntigravityNode
+	default:
+		return true
+	}
+}
 func (s *Server) desktopChatRuntime(w http.ResponseWriter, r *http.Request) {
 	db, err := s.desktopDB()
 	if err != nil {
@@ -147,11 +158,15 @@ func (s *Server) desktopChatRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
 		decoder.DisallowUnknownFields()
-		if decoder.Decode(&c) != nil || ensureJSONEOF(decoder) != nil || (c.Provider != "hermes" && c.Provider != "codex_desktop") {
+		if decoder.Decode(&c) != nil || ensureJSONEOF(decoder) != nil || (c.Provider != "hermes" && c.Provider != "codex_desktop" && c.Provider != "antigravity_desktop") {
 			writeError(w, 400, "无效AI运行时设置")
 			return
 		}
-		if c.Provider == "codex_desktop" {
+		if c.Provider == "codex_desktop" || c.Provider == "antigravity_desktop" {
+			if !desktopProviderMatchesNode(c.Provider, c.Node) {
+				writeError(w, 400, "桌面桥类型与节点不匹配")
+				return
+			}
 			models, online := desktopChatCatalog(db, c)
 			if s.linkage == nil || !s.linkage.IsConfiguredTarget(c.Workspace, c.Node) || !online || !validDesktopSelection(c, models) {
 				writeError(w, 400, "桌面离线或模型/推理强度不可用")
@@ -249,11 +264,19 @@ func (s *Server) desktopChatJob(w http.ResponseWriter, r *http.Request) {
 		}
 		c := loadDesktopChatConfig(db)
 		if input.BridgeTest {
-			c = desktopChatConfig{Provider: "codex_desktop", Node: input.Node, Workspace: input.Workspace, Model: input.Model, Effort: input.Effort}
+			provider := "codex_desktop"
+			if strings.HasPrefix(strings.ToLower(input.Node), "agv-") {
+				provider = "antigravity_desktop"
+			}
+			c = desktopChatConfig{Provider: provider, Node: input.Node, Workspace: input.Workspace, Model: input.Model, Effort: input.Effort}
+		}
+		if !desktopProviderMatchesNode(c.Provider, c.Node) {
+			writeError(w, 503, "桌面桥类型与节点不匹配")
+			return
 		}
 		models, online := desktopChatCatalog(db, c)
-		if c.Provider != "codex_desktop" || !online || !validDesktopSelection(c, models) {
-			writeError(w, 503, "Codex桌面对话未就绪")
+		if (c.Provider != "codex_desktop" && c.Provider != "antigravity_desktop") || !online || !validDesktopSelection(c, models) {
+			writeError(w, 503, "桌面对话未就绪")
 			return
 		}
 		if s.linkage == nil || !s.linkage.IsConfiguredTarget(c.Workspace, c.Node) {
