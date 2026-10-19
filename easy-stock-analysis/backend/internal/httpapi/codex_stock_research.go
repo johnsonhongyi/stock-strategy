@@ -14,6 +14,7 @@ import (
 )
 
 const stockResearchCodexPurpose = "stock_research"
+const defaultDesktopResearchUsageModule = "stock-analysis"
 
 func desktopResearchBridgeLabel(provider string) string {
 	if provider == "antigravity_desktop" {
@@ -34,6 +35,7 @@ type stockResearchCodexPrompter struct {
 	session   string
 	thread    string
 	identity  string
+	usageModule string
 }
 
 func (s *Server) stockResearchDesktopConfig(db *sql.DB, request stockanalysis.ResearchRequest) (desktopChatConfig, error) {
@@ -78,7 +80,7 @@ func (s *Server) stockResearchCodexIdentity(request stockanalysis.ResearchReques
 	identity, _ := json.Marshal([]string{provider, cfg.Node, cfg.Workspace, request.Model, request.ReasoningEffort})
 	return string(identity), nil
 }
-func (s *Server) newStockResearchCodexPrompter(request stockanalysis.ResearchRequest) (*stockResearchCodexPrompter, error) {
+func (s *Server) newStockResearchCodexPrompter(request stockanalysis.ResearchRequest, usageModules ...string) (*stockResearchCodexPrompter, error) {
 	db, err := s.desktopDB()
 	if err != nil {
 		return nil, errors.New("桌面桥对话队列不可用")
@@ -99,9 +101,13 @@ func (s *Server) newStockResearchCodexPrompter(request stockanalysis.ResearchReq
 	if provider == "" {
 		provider = "codex_desktop"
 	}
+	usageModule := defaultDesktopResearchUsageModule
+	if len(usageModules) > 0 && usageModules[0] == "portfolio-inspection" {
+		usageModule = usageModules[0]
+	}
 	identity, _ := json.Marshal([]string{provider, cfg.Node, cfg.Workspace, request.Model, request.ReasoningEffort})
 	return &stockResearchCodexPrompter{
-		server: s, db: db, request: request, model: request.Model, effort: request.ReasoningEffort,
+		server: s, db: db, request: request, model: request.Model, effort: request.ReasoningEffort, usageModule: usageModule,
 		node: cfg.Node, workspace: cfg.Workspace, owner: owner, session: session, identity: string(identity),
 	}, nil
 }
@@ -130,6 +136,7 @@ func (p *stockResearchCodexPrompter) PromptWithOptions(ctx context.Context, prom
 	body, err := json.Marshal(map[string]any{
 		"prompt": prompt, "messages": []any{}, "thread_id": p.thread,
 		"model": p.model, "reasoning_effort": p.effort, "purpose": stockResearchCodexPurpose,
+		"usage_module": p.usageModule,
 		"symbol": p.request.Symbol, "analysis_level": p.request.AnalysisLevel,
 		"timeout_seconds":  int(stockanalysis.ResearchStageTimeout(p.request).Seconds()),
 		"deadline_unix_ms": deadline.UnixMilli(),

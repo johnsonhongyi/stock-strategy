@@ -73,3 +73,31 @@ func TestDesktopBridgeTestUsageModule(t *testing.T) {
 		}
 	}
 }
+
+func TestDesktopPortfolioUsageModule(t *testing.T) {
+	server, _ := followFixture(t)
+	db, err := server.desktopDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	body := `{"purpose":"stock_research","usage_module":"portfolio-inspection"}`
+	if _, err := db.Exec(`INSERT INTO desktop_chat_jobs(id,session_id,owner,node_id,workspace_id,body,status,created_at,expires_at,result) VALUES('portfolio-job','session','owner','desk','ws',?,'completed',1,300,'{"token_usage":{"totalTokens":1}}')`, body); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recordDesktopUsage(tx, "portfolio-job", time.Now().Unix()); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var module string
+	if err := db.QueryRow(`SELECT module FROM desktop_token_usage WHERE job_id='portfolio-job'`).Scan(&module); err != nil || module != "portfolio-inspection" {
+		t.Fatalf("module=%q error=%v", module, err)
+	}
+}

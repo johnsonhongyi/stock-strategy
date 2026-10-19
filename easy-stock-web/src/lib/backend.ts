@@ -1121,7 +1121,7 @@ export type PortfolioInspectionJob = {
 	id: string;
 	status: 'running' | 'succeeded' | 'partial' | 'failed' | 'interrupted' | string;
 	stage: string;
-	request: { trader_profile: PortfolioTraderProfile; holdings: PortfolioHolding[] };
+	request: { trader_profile: PortfolioTraderProfile; holdings: PortfolioHolding[]; ai_provider?: 'hermes' | 'codex_desktop' | 'antigravity_desktop'; model?: string; reasoning_effort?: string; desktop_node_id?: string; desktop_workspace_id?: string };
 	results: PortfolioHoldingResult[];
 	completed_stocks: number;
 	total_stocks: number;

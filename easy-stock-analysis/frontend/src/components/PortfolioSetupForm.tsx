@@ -8,6 +8,7 @@ type Props = {
 	draft: PortfolioDraft;
 	directory: StockDirectoryEntry[];
 	disabled?: boolean;
+	submitDisabled?: boolean;
 	busy?: boolean;
 	actionLabel: string;
 	busyLabel: string;
@@ -16,7 +17,7 @@ type Props = {
 	onSubmit: () => void;
 };
 
-export function PortfolioSetupForm({ draft, directory, disabled = false, busy = false, actionLabel, busyLabel, actionIcon, onChange, onSubmit }: Props) {
+export function PortfolioSetupForm({ draft, directory, disabled = false, submitDisabled = false, busy = false, actionLabel, busyLabel, actionIcon, onChange, onSubmit }: Props) {
 	const [query, setQuery] = useState('');
 	const [suggestionsOpen, setSuggestionsOpen] = useState(false);
 	const [activeSuggestion, setActiveSuggestion] = useState(0);
@@ -78,7 +79,7 @@ export function PortfolioSetupForm({ draft, directory, disabled = false, busy = 
 				{draft.holdings.map((holding, index) => <article key={holding.symbol}><div className="portfolio-holding-identity"><i>{String(index + 1).padStart(2, '0')}</i><div><strong>{holding.name}</strong><span>{holding.symbol}</span></div></div><div className="portfolio-weight-control"><input type="range" min="1" max="100" value={holding.weight} disabled={disabled} onChange={(event) => updateWeight(holding.symbol, Number(event.target.value))} aria-label={`${holding.name}持仓占比`} /><label><input type="number" min="1" max={holding.weight + remainingWeight} value={holding.weight} disabled={disabled} onChange={(event) => updateWeight(holding.symbol, Number(event.target.value))} /><span>%</span></label></div><label className="portfolio-cost-input"><span>持仓成本</span><input inputMode="decimal" value={holding.costPrice} disabled={disabled} onChange={(event) => updateHolding(holding.symbol, { costPrice: event.target.value })} placeholder="选填" /></label><button type="button" className="portfolio-remove" onClick={() => onChange({ ...draft, holdings: draft.holdings.filter((item) => item.symbol !== holding.symbol) })} disabled={disabled} aria-label={`删除${holding.name}`} title="删除"><Trash2 size={16} /></button></article>)}
 			</div>
 		</section>
-		<footer className="portfolio-builder-footer"><div><Activity size={17} /><span>总仓位 {totalWeight}%</span><strong>现金 {remainingWeight}%</strong></div><button type="button" onClick={onSubmit} disabled={disabled || busy || draft.holdings.length === 0 || totalWeight > 100}>{busy ? <LoaderCircle className="spin" size={17} /> : actionIcon || <BrainCircuit size={17} />}{busy ? busyLabel : actionLabel}</button></footer>
+		<footer className="portfolio-builder-footer"><div><Activity size={17} /><span>总仓位 {totalWeight}%</span><strong>现金 {remainingWeight}%</strong></div><button type="button" onClick={onSubmit} disabled={disabled || submitDisabled || busy || draft.holdings.length === 0 || totalWeight > 100}>{busy ? <LoaderCircle className="spin" size={17} /> : actionIcon || <BrainCircuit size={17} />}{busy ? busyLabel : actionLabel}</button></footer>
 	</div>;
 }
 

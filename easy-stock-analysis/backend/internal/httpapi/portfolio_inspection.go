@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -8,8 +9,52 @@ import (
 	"strconv"
 	"strings"
 
+	"easy-stock/backend/internal/hermes"
 	"easy-stock/backend/internal/portfolioinspection"
+	"easy-stock/backend/internal/stockanalysis"
 )
+
+func (s *Server) portfolioStockResearchRequest(request portfolioinspection.Request, holding portfolioinspection.Holding) stockanalysis.ResearchRequest {
+	return stockanalysis.ResearchRequest{
+		Symbol: holding.Symbol, Purpose: "holding", Horizon: "swing", CostPrice: holding.CostPrice,
+		AnalysisLevel: stockanalysis.ResearchLevelStandard, AIProvider: request.AIProvider,
+		Model: request.Model, ReasoningEffort: request.ReasoningEffort,
+		DesktopNodeID: request.DesktopNodeID, DesktopWorkspaceID: request.DesktopWorkspaceID,
+	}
+}
+
+func (s *Server) validatePortfolioDesktopRuntime(ctx context.Context, request portfolioinspection.Request) error {
+	if len(request.Holdings) == 0 {
+		return errors.New("请至少添加一只持仓股票")
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	_, err := s.stockResearchCodexIdentity(s.portfolioStockResearchRequest(request, request.Holdings[0]))
+	return err
+}
+
+func (s *Server) analyzePortfolioHolding(ctx context.Context, request portfolioinspection.Request, holding portfolioinspection.Holding) (stockanalysis.Analysis, error) {
+	return s.awaitStockResearch(ctx, s.portfolioStockResearchRequest(request, holding))
+}
+
+func (s *Server) generatePortfolioDesktopReport(ctx context.Context, request portfolioinspection.Request, prompt string) (string, error) {
+	if len(request.Holdings) == 0 {
+		return "", errors.New("组合没有可分析的持仓")
+	}
+	prompter, err := s.newStockResearchCodexPrompter(s.portfolioStockResearchRequest(request, request.Holdings[0]), "portfolio-inspection")
+	if err != nil {
+		return "", err
+	}
+	defer prompter.Close()
+	result, err := prompter.PromptWithOptions(ctx, prompt, hermes.PromptOptions{Sandbox: true, AutoApprove: true, DisableTools: true})
+	if err != nil {
+		return "", err
+	}
+	return result.Content, nil
+}
 
 func (s *Server) portfolioInspectionCreate(w http.ResponseWriter, r *http.Request) {
 	if s.portfolioInspection == nil {
@@ -29,7 +74,7 @@ func (s *Server) portfolioInspectionCreate(w http.ResponseWriter, r *http.Reques
 		status := http.StatusBadRequest
 		if errors.Is(err, portfolioinspection.ErrJobRunning) {
 			status = http.StatusConflict
-		} else if strings.Contains(err.Error(), "AI") || strings.Contains(err.Error(), "模型") {
+		} else if errors.Is(err, portfolioinspection.ErrRuntimeUnavailable) || strings.Contains(err.Error(), "AI") || strings.Contains(err.Error(), "模型") {
 			status = http.StatusServiceUnavailable
 		}
 		writeError(w, status, err.Error())

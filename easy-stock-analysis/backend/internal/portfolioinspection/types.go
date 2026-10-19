@@ -42,8 +42,13 @@ type Holding struct {
 }
 
 type Request struct {
-	TraderProfile TraderProfile `json:"trader_profile"`
-	Holdings      []Holding     `json:"holdings"`
+	TraderProfile      TraderProfile `json:"trader_profile"`
+	Holdings           []Holding     `json:"holdings"`
+	AIProvider         string        `json:"ai_provider,omitempty"`
+	Model              string        `json:"model,omitempty"`
+	ReasoningEffort    string        `json:"reasoning_effort,omitempty"`
+	DesktopNodeID      string        `json:"desktop_node_id,omitempty"`
+	DesktopWorkspaceID string        `json:"desktop_workspace_id,omitempty"`
 }
 
 type HoldingResult struct {

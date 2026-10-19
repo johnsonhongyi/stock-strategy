@@ -21,9 +21,15 @@ import (
 )
 
 var ErrJobRunning = errors.New("已有持仓巡检正在运行，请等待完成后再开始新的巡检")
+var ErrRuntimeUnavailable = errors.New("AI运行时不可用")
 
 type StockAnalyzer func(context.Context, string) (stockanalysis.Analysis, error)
 type HoldingAnalyzer func(context.Context, Holding) (stockanalysis.Analysis, error)
+type DesktopAdapter struct {
+	Validate       func(context.Context, Request) error
+	AnalyzeHolding func(context.Context, Request, Holding) (stockanalysis.Analysis, error)
+	GenerateReport func(context.Context, Request, string) (string, error)
+}
 
 type Service struct {
 	store          *Store
@@ -32,8 +38,15 @@ type Service struct {
 	analyzeHolding HoldingAnalyzer
 	logger         *log.Logger
 	concurrency    int
+	desktop        DesktopAdapter
 	mu             sync.Mutex
 	runningID      string
+}
+
+func (s *Service) SetDesktopAdapter(adapter DesktopAdapter) {
+	if s != nil {
+		s.desktop = adapter
+	}
 }
 
 func NewService(store *Store, gateway hermes.Gateway, analyze StockAnalyzer, logger *log.Logger, holdingAnalyzers ...HoldingAnalyzer) *Service {
@@ -55,12 +68,24 @@ func (s *Service) Start(ctx context.Context, request Request) (Job, error) {
 	if s == nil || s.store == nil || s.analyze == nil {
 		return Job{}, errors.New("持仓巡检服务不可用")
 	}
-	if s.gateway == nil {
-		return Job{}, errors.New("AI分析底座不可用，请先在系统设置中配置模型")
-	}
-	status := s.gateway.Status()
-	if !status.Available || !status.Configured {
-		return Job{}, errors.New(firstNonEmpty(status.Message, "请先在系统设置中配置AI模型"))
+	switch normalized.AIProvider {
+	case "hermes":
+		if s.gateway == nil {
+			return Job{}, fmt.Errorf("%w：AI分析底座不可用，请在系统设置中配置 Hermes", ErrRuntimeUnavailable)
+		}
+		status := s.gateway.Status()
+		if !status.Available || !status.Configured {
+			return Job{}, fmt.Errorf("%w：%s", ErrRuntimeUnavailable, firstNonEmpty(status.Message, "请在系统设置中配置 Hermes"))
+		}
+	case "codex_desktop", "antigravity_desktop":
+		if s.desktop.Validate == nil || s.desktop.AnalyzeHolding == nil || s.desktop.GenerateReport == nil {
+			return Job{}, fmt.Errorf("%w：持仓巡检未接入所选桌面桥", ErrRuntimeUnavailable)
+		}
+		if err := s.desktop.Validate(ctx, normalized); err != nil {
+			return Job{}, fmt.Errorf("%w：%v", ErrRuntimeUnavailable, err)
+		}
+	default:
+		return Job{}, fmt.Errorf("不支持的 AI 运行时 %q", normalized.AIProvider)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -130,7 +155,9 @@ func (s *Service) run(job Job) {
 				events <- event{index: index, started: true}
 				var analysis stockanalysis.Analysis
 				var err error
-				if s.analyzeHolding != nil {
+				if job.Request.AIProvider == "codex_desktop" || job.Request.AIProvider == "antigravity_desktop" {
+					analysis, err = s.desktop.AnalyzeHolding(ctx, job.Request, job.Results[index].Holding)
+				} else if s.analyzeHolding != nil {
 					analysis, err = s.analyzeHolding(ctx, job.Results[index].Holding)
 				} else {
 					analysis, err = s.analyze(ctx, job.Results[index].Holding.Symbol)
@@ -242,9 +269,19 @@ func (s *Service) generateAIReport(ctx context.Context, request Request, results
 	if err != nil {
 		return AIReport{}, err
 	}
-	response, err := hermes.PromptFullyAuthorized(hermes.WithUsageModule(ctx, "portfolio-inspection"), s.gateway, prompt)
-	if err != nil {
-		return AIReport{}, fmt.Errorf("持仓组合AI分析失败: %w", err)
+	var response hermes.PromptResult
+	if request.AIProvider == "codex_desktop" || request.AIProvider == "antigravity_desktop" {
+		content, err := s.desktop.GenerateReport(ctx, request, prompt)
+		if err != nil {
+			return AIReport{}, fmt.Errorf("持仓组合桌面AI分析失败: %w", err)
+		}
+		response.Content = content
+	} else {
+		var err error
+		response, err = hermes.PromptFullyAuthorized(hermes.WithUsageModule(ctx, "portfolio-inspection"), s.gateway, prompt)
+		if err != nil {
+			return AIReport{}, fmt.Errorf("持仓组合AI分析失败: %w", err)
+		}
 	}
 	var report AIReport
 	if err := decodeJSONObject(response.Content, &report); err != nil {
@@ -258,6 +295,11 @@ func (s *Service) generateAIReport(ctx context.Context, request Request, results
 	report.StyleMatch = styleMatchLabel(metrics.StyleMatchScore)
 	report.Confidence = math.Max(0, math.Min(1, report.Confidence))
 	report.Source = "hermes-ai"
+	if request.AIProvider == "codex_desktop" {
+		report.Source = "codex-desktop-ai"
+	} else if request.AIProvider == "antigravity_desktop" {
+		report.Source = "antigravity-desktop-ai"
+	}
 	report.PrimaryRisks = limitStrings(report.PrimaryRisks, 8)
 	report.ConcentrationFinding = limitStrings(report.ConcentrationFinding, 8)
 	report.AdjustmentOrder = limitStrings(report.AdjustmentOrder, 10)
@@ -281,7 +323,25 @@ func normalizeRequest(request Request) (Request, error) {
 	}
 	seen := map[string]struct{}{}
 	total := 0
-	normalized := Request{TraderProfile: request.TraderProfile, Holdings: make([]Holding, 0, len(request.Holdings))}
+	provider := strings.TrimSpace(request.AIProvider)
+	if provider == "" {
+		provider = "hermes"
+	}
+	if provider != "hermes" && provider != "codex_desktop" && provider != "antigravity_desktop" {
+		return Request{}, fmt.Errorf("ai_provider must be hermes, codex_desktop or antigravity_desktop")
+	}
+	normalized := Request{
+		TraderProfile: request.TraderProfile, Holdings: make([]Holding, 0, len(request.Holdings)),
+		AIProvider: provider, Model: strings.TrimSpace(request.Model), ReasoningEffort: strings.TrimSpace(request.ReasoningEffort),
+		DesktopNodeID: strings.TrimSpace(request.DesktopNodeID), DesktopWorkspaceID: strings.TrimSpace(request.DesktopWorkspaceID),
+	}
+	if provider == "hermes" {
+		if normalized.Model != "" || normalized.ReasoningEffort != "" || normalized.DesktopNodeID != "" || normalized.DesktopWorkspaceID != "" {
+			return Request{}, errors.New("Hermes 请求不能包含桌面桥模型或节点")
+		}
+	} else if normalized.Model == "" || len(normalized.Model) > 128 || strings.ContainsAny(normalized.Model, "\r\n\x00") || normalized.ReasoningEffort == "" || len(normalized.ReasoningEffort) > 32 || strings.ContainsAny(normalized.ReasoningEffort, "\r\n\x00") || normalized.DesktopNodeID == "" || len(normalized.DesktopNodeID) > 128 || strings.ContainsAny(normalized.DesktopNodeID, "\r\n\x00") || normalized.DesktopWorkspaceID == "" || len(normalized.DesktopWorkspaceID) > 128 || strings.ContainsAny(normalized.DesktopWorkspaceID, "\r\n\x00") {
+		return Request{}, fmt.Errorf("%s requires a valid model, reasoning_effort and desktop node", provider)
+	}
 	for _, holding := range request.Holdings {
 		symbol, err := foundation.NormalizeSymbol(holding.Symbol)
 		if err != nil {

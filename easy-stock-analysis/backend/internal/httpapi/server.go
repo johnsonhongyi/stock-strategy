@@ -454,6 +454,11 @@ func NewServer(config any) *Server {
 	)
 	s.stockResearch = stockanalysis.NewResearchService(cfg.StockResearchStore, s.runStockResearch)
 	s.portfolioInspection = portfolioinspection.NewService(cfg.PortfolioStore, usageGateway, s.analyzeStock, cfg.Logger, s.analyzeHoldingResearch)
+	s.portfolioInspection.SetDesktopAdapter(portfolioinspection.DesktopAdapter{
+		Validate:       s.validatePortfolioDesktopRuntime,
+		AnalyzeHolding: s.analyzePortfolioHolding,
+		GenerateReport: s.generatePortfolioDesktopReport,
+	})
 	s.portfolioExpectation = portfolioinspection.NewExpectationService(cfg.PortfolioStore, cfg.ReviewStore, usageGateway, s.analyzeStock, cfg.Logger, s.analyzeHoldingResearch)
 	s.routes()
 	return s
