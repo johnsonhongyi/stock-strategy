@@ -21,6 +21,7 @@ import (
 )
 
 var ErrJobRunning = errors.New("已有持仓巡检正在运行，请等待完成后再开始新的巡检")
+var ErrDeleteRunningJob = errors.New("正在运行的巡检记录不能删除")
 var ErrRuntimeUnavailable = errors.New("AI运行时不可用")
 
 type StockAnalyzer func(context.Context, string) (stockanalysis.Analysis, error)
@@ -127,6 +128,26 @@ func (s *Service) List(ctx context.Context, limit int) ([]Job, error) {
 		return nil, errors.New("持仓巡检服务不可用")
 	}
 	return s.store.List(ctx, limit)
+}
+
+func (s *Service) Delete(ctx context.Context, id string) error {
+	if s == nil || s.store == nil {
+		return errors.New("持仓巡检服务不可用")
+	}
+	id = strings.TrimSpace(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runningID == id {
+		return ErrDeleteRunningJob
+	}
+	job, err := s.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if job.Status == "running" || job.Status == "queued" {
+		return ErrDeleteRunningJob
+	}
+	return s.store.Delete(ctx, id)
 }
 
 func (s *Service) run(job Job) {

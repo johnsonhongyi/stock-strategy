@@ -10,9 +10,10 @@ import {
 	Plus,
 	RefreshCw,
 	ShieldCheck,
+	Trash2,
 	WalletCards,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
 	AppSettings,
 	BackendConfig,
@@ -25,7 +26,8 @@ import {
 	requestJSON,
 } from '../lib/backend';
 import { desktopModelGroups, resolveDesktopModelSelection, selectedDesktopModelGroup, type DesktopModelGroup } from '../lib/desktop-model-groups';
-import { loadAvailableDesktopChatTargets, loadChatRuntime, type AvailableDesktopChatTarget } from '../lib/desktop-chat';
+import { loadAvailableDesktopChatTargets, loadChatRuntime, saveChatRuntime, type AvailableDesktopChatTarget } from '../lib/desktop-chat';
+import { bridgeTargetLabel } from '../lib/linkage-display';
 import { portfolioDraftToHoldings, portfolioProfiles, readPortfolioDraft, writePortfolioDraft } from '../lib/portfolio-draft';
 import { PortfolioSetupForm } from './PortfolioSetupForm';
 
@@ -37,7 +39,6 @@ type Props = {
 };
 
 const directoryStorageKey = 'easy-stock.stock-directory.v1';
-const runtimeStorageKey = 'easy-stock.portfolio-inspection-runtime.v1';
 type InspectionDesktopProvider = 'codex_desktop' | 'antigravity_desktop';
 type InspectionRuntimePreference = { provider: 'hermes' | InspectionDesktopProvider; node_id: string; workspace_id: string; model: string; reasoning_effort: string };
 
@@ -53,20 +54,8 @@ function resolveAvailableDesktopModelSelection(models: AvailableDesktopChatTarge
 	return resolveDesktopModelSelection(models, provider, model, effort) || resolveDesktopModelSelection(models, provider, models[0]?.id || '', effort);
 }
 
-function readInspectionRuntimePreference(): InspectionRuntimePreference | null {
-	try {
-		const value = JSON.parse(window.localStorage.getItem(runtimeStorageKey) || 'null') as Partial<InspectionRuntimePreference> | null;
-		if (!value || !['hermes', 'codex_desktop', 'antigravity_desktop'].includes(value.provider || '')) return null;
-		return { provider: value.provider as InspectionRuntimePreference['provider'], node_id: value.node_id || '', workspace_id: value.workspace_id || '', model: value.model || '', reasoning_effort: value.reasoning_effort || '' };
-	} catch { return null; }
-}
-
-function saveInspectionRuntimePreference(value: InspectionRuntimePreference) {
-	try { window.localStorage.setItem(runtimeStorageKey, JSON.stringify(value)); } catch { /* Runtime selection remains available for this page session. */ }
-}
-
 function runtimeNodeLabel(target: AvailableDesktopChatTarget) {
-	return `${target.label} · ${target.node_id.slice(0, 8)} / ${target.workspace_id.slice(0, 8)}`;
+	return bridgeTargetLabel(target);
 }
 
 function inspectionProviderLabel(provider?: string) {
@@ -75,8 +64,7 @@ function inspectionProviderLabel(provider?: string) {
 }
 
 export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSettings, onOpenStockAnalysis }: Props) {
-	const [runtimePreference, setRuntimePreference] = useState<InspectionRuntimePreference>(() => readInspectionRuntimePreference() || { provider: 'hermes', node_id: '', workspace_id: '', model: '', reasoning_effort: '' });
-	const hasSavedRuntimePreference = useRef(readInspectionRuntimePreference() !== null);
+	const [runtimePreference, setRuntimePreference] = useState<InspectionRuntimePreference>({ provider: 'hermes', node_id: '', workspace_id: '', model: '', reasoning_effort: '' });
 	const [desktopTargets, setDesktopTargets] = useState<AvailableDesktopChatTarget[]>([]);
 	const [hermesReady, setHermesReady] = useState(false);
 	const [runtimeChecked, setRuntimeChecked] = useState(false);
@@ -87,6 +75,7 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 	const [directory, setDirectory] = useState<StockDirectoryEntry[]>(loadCachedDirectory);
 	const [history, setHistory] = useState<PortfolioInspectionJob[]>([]);
 	const [job, setJob] = useState<PortfolioInspectionJob | null>(null);
+	const [deletingInspectionID, setDeletingInspectionID] = useState('');
 	const [loading, setLoading] = useState(true);
 	const [starting, setStarting] = useState(false);
 	const [error, setError] = useState('');
@@ -103,10 +92,19 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 	const selectedModelGroup = resolvedModel ? selectedDesktopModelGroup(modelGroups, resolvedModel.model) : undefined;
 	const runtimeReady = runtimePreference.provider === 'hermes' ? hermesReady : Boolean(selectedTarget && resolvedModel);
 
-	const saveRuntimePreference = useCallback((next: InspectionRuntimePreference) => {
-		setRuntimePreference(next);
-		saveInspectionRuntimePreference(next);
-	}, []);
+	const saveRuntimePreference = useCallback(async (next: InspectionRuntimePreference) => {
+		if (!config) return;
+		setRuntimeLoading(true);
+		try {
+			const saved = await saveChatRuntime(config, next);
+			setRuntimePreference(saved.config);
+			window.dispatchEvent(new Event('ai-runtime-changed'));
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : '保存系统 AI 运行时失败');
+		} finally {
+			setRuntimeLoading(false);
+		}
+	}, [config]);
 
 	const refreshRuntime = useCallback(async () => {
 		if (!config) return;
@@ -122,29 +120,27 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 			const readyHermes = Boolean(hermesStatus?.available && hermesStatus.configured);
 			setHermesReady(readyHermes);
 			setDesktopTargets(nextTargets);
-			if (!hasSavedRuntimePreference.current) {
-				const firstTarget = nextTargets.find((target) => target.node_id === available?.strategyTarget?.node_id) || nextTargets[0] || null;
-				const initialProvider: InspectionRuntimePreference['provider'] = isInspectionDesktopProvider(globalRuntime?.config.provider)
-					? globalRuntime.config.provider
-					: !readyHermes && firstTarget ? inspectionProviderForTarget(firstTarget) : 'hermes';
-				const desktopProvider = isInspectionDesktopProvider(initialProvider) ? initialProvider : null;
-				const candidates = desktopProvider ? inspectionTargetsForProvider(nextTargets, desktopProvider) : [];
-				const target = desktopProvider ? candidates.find((item) => item.node_id === globalRuntime?.config.node_id && item.workspace_id === globalRuntime?.config.workspace_id)
-					|| candidates.find((item) => item.node_id === available?.strategyTarget?.node_id && item.workspace_id === available?.strategyTarget?.workspace_id)
-					|| candidates[0] || null : null;
-				const initialModel = target && desktopProvider ? resolveAvailableDesktopModelSelection(target.runtime.models, desktopProvider, globalRuntime?.config.model || target.runtime.config.model, globalRuntime?.config.reasoning_effort || target.runtime.config.reasoning_effort) : null;
-				const initialGroup = target && initialModel && desktopProvider ? selectedDesktopModelGroup(desktopModelGroups(target.runtime.models, desktopProvider), initialModel.model) : undefined;
-				hasSavedRuntimePreference.current = true;
-				saveRuntimePreference({ provider: initialProvider, node_id: target?.node_id || '', workspace_id: target?.workspace_id || '', model: initialGroup?.id || '', reasoning_effort: initialModel?.reasoning_effort || '' });
-			} else if (isInspectionDesktopProvider(runtimePreference.provider)) {
-				const candidates = inspectionTargetsForProvider(nextTargets, runtimePreference.provider);
-				const current = candidates.find((target) => target.node_id === runtimePreference.node_id && target.workspace_id === runtimePreference.workspace_id);
-				const target = current || candidates.find((item) => item.node_id === available?.strategyTarget?.node_id && item.workspace_id === available?.strategyTarget?.workspace_id) || candidates[0] || null;
-				if (target && !current) {
-					const model = resolveAvailableDesktopModelSelection(target.runtime.models, runtimePreference.provider, runtimePreference.model || target.runtime.config.model, runtimePreference.reasoning_effort || target.runtime.config.reasoning_effort);
-					const group = model ? selectedDesktopModelGroup(desktopModelGroups(target.runtime.models, runtimePreference.provider), model.model) : undefined;
-					saveRuntimePreference({ ...runtimePreference, node_id: target.node_id, workspace_id: target.workspace_id, model: group?.id || '', reasoning_effort: model?.reasoning_effort || '' });
-					setRuntimeNotice(`原巡检桥已离线，已切换到在线${inspectionDesktopProviderLabel(runtimePreference.provider)}：${runtimeNodeLabel(target)}`);
+			if (globalRuntime) {
+				const provider = globalRuntime.config.provider;
+				const candidates = isInspectionDesktopProvider(provider) ? inspectionTargetsForProvider(nextTargets, provider) : [];
+				const target = isInspectionDesktopProvider(provider)
+					? candidates.find((item) => item.node_id === globalRuntime.config.node_id && item.workspace_id === globalRuntime.config.workspace_id)
+						|| candidates.find((item) => item.node_id === available?.strategyTarget?.node_id && item.workspace_id === available?.strategyTarget?.workspace_id)
+						|| candidates[0] || null
+					: null;
+				const model = target && isInspectionDesktopProvider(provider)
+					? resolveAvailableDesktopModelSelection(target.runtime.models, provider, globalRuntime.config.model || target.runtime.config.model, globalRuntime.config.reasoning_effort || target.runtime.config.reasoning_effort)
+					: null;
+				const group = target && model && isInspectionDesktopProvider(provider) ? selectedDesktopModelGroup(desktopModelGroups(target.runtime.models, provider), model.model) : undefined;
+				setRuntimePreference({ provider, node_id: target?.node_id || globalRuntime.config.node_id || '', workspace_id: target?.workspace_id || globalRuntime.config.workspace_id || '', model: group?.id || globalRuntime.config.model || '', reasoning_effort: model?.reasoning_effort || globalRuntime.config.reasoning_effort || '' });
+				if (target && model && isInspectionDesktopProvider(provider)) {
+					const aligned = { ...globalRuntime.config, node_id: target.node_id, workspace_id: target.workspace_id, model: model.model, reasoning_effort: model.reasoning_effort };
+					if (JSON.stringify(aligned) !== JSON.stringify(globalRuntime.config)) {
+						await saveChatRuntime(config, aligned);
+						setRuntimePreference(aligned);
+						window.dispatchEvent(new Event('ai-runtime-changed'));
+						if (target.node_id !== globalRuntime.config.node_id || target.workspace_id !== globalRuntime.config.workspace_id) setRuntimeNotice(`系统设置中的桌面桥已离线，已统一切换到活跃桥：${runtimeNodeLabel(target)}`);
+					}
 				}
 			}
 			setRuntimeMessage(readyHermes ? 'Hermes 已配置，可用于持仓巡检' : hermesStatus?.message || 'Hermes 状态暂不可读或运行时未配置；可选择在线 Codex 或 Antigravity 桌面桥');
@@ -154,38 +150,41 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 			setRuntimeChecked(true);
 			setRuntimeLoading(false);
 		}
-	}, [config, runtimePreference, saveRuntimePreference]);
+	}, [config]);
 
 	useEffect(() => {
 		void refreshRuntime();
-		const timer = window.setInterval(() => void refreshRuntime(), 20_000);
-		return () => window.clearInterval(timer);
+		const onRuntimeChanged = () => void refreshRuntime();
+		window.addEventListener('ai-runtime-changed', onRuntimeChanged);
+		return () => window.removeEventListener('ai-runtime-changed', onRuntimeChanged);
 	}, [refreshRuntime]);
+	useAutoRefresh(() => refreshRuntime(), 20_000, !!config, config);
 
 	const chooseProvider = (provider: InspectionRuntimePreference['provider']) => {
 		const candidates = isInspectionDesktopProvider(provider) ? inspectionTargetsForProvider(desktopTargets, provider) : [];
 		const target = candidates.find((item) => item.node_id === runtimePreference.node_id && item.workspace_id === runtimePreference.workspace_id) || candidates[0] || null;
-		const model = target && isInspectionDesktopProvider(provider) ? resolveAvailableDesktopModelSelection(target.runtime.models, provider, target.runtime.config.model, target.runtime.config.reasoning_effort) : null;
-		const group = target && model && isInspectionDesktopProvider(provider) ? selectedDesktopModelGroup(desktopModelGroups(target.runtime.models, provider), model.model) : undefined;
-		hasSavedRuntimePreference.current = true;
-		saveRuntimePreference({ provider, node_id: target?.node_id || '', workspace_id: target?.workspace_id || '', model: group?.id || '', reasoning_effort: model?.reasoning_effort || '' });
+		const model = target && isInspectionDesktopProvider(provider) ? resolveAvailableDesktopModelSelection(target.runtime.models, provider, runtimePreference.model || target.runtime.config.model, runtimePreference.reasoning_effort || target.runtime.config.reasoning_effort) : null;
+		void saveRuntimePreference({ provider, node_id: target?.node_id || '', workspace_id: target?.workspace_id || '', model: model?.model || '', reasoning_effort: model?.reasoning_effort || '' });
 		setRuntimeNotice('');
 	};
 
 	const chooseTarget = (target: AvailableDesktopChatTarget | null) => {
 		if (!target || !isInspectionDesktopProvider(runtimePreference.provider)) return;
 		const model = resolveAvailableDesktopModelSelection(target.runtime.models, runtimePreference.provider, runtimePreference.model || target.runtime.config.model, runtimePreference.reasoning_effort || target.runtime.config.reasoning_effort);
-		const group = model ? selectedDesktopModelGroup(desktopModelGroups(target.runtime.models, runtimePreference.provider), model.model) : undefined;
-		saveRuntimePreference({ ...runtimePreference, node_id: target.node_id, workspace_id: target.workspace_id, model: group?.id || '', reasoning_effort: model?.reasoning_effort || '' });
+		void saveRuntimePreference({ ...runtimePreference, node_id: target.node_id, workspace_id: target.workspace_id, model: model?.model || '', reasoning_effort: model?.reasoning_effort || '' });
 	};
 
 	const chooseModel = (group: DesktopModelGroup | undefined) => {
 		if (!selectedTarget || !isInspectionDesktopProvider(runtimePreference.provider) || !group) return;
-		const effort = group.efforts.includes(runtimePreference.reasoning_effort) ? runtimePreference.reasoning_effort : group.efforts[0] || '';
-		saveRuntimePreference({ ...runtimePreference, model: group.id, reasoning_effort: effort });
+		const model = resolveAvailableDesktopModelSelection(selectedTarget.runtime.models, runtimePreference.provider, group.id, runtimePreference.reasoning_effort);
+		if (model) void saveRuntimePreference({ ...runtimePreference, model: model.model, reasoning_effort: model.reasoning_effort });
 	};
 
-	const chooseEffort = (effort: string) => saveRuntimePreference({ ...runtimePreference, reasoning_effort: effort });
+	const chooseEffort = (effort: string) => {
+		if (!selectedTarget || !isInspectionDesktopProvider(runtimePreference.provider)) return;
+		const model = resolveAvailableDesktopModelSelection(selectedTarget.runtime.models, runtimePreference.provider, runtimePreference.model, effort);
+		if (model) void saveRuntimePreference({ ...runtimePreference, model: model.model, reasoning_effort: model.reasoning_effort });
+	};
 
 	const loadWorkspace = useCallback(async () => {
 		if (!config) return;
@@ -267,17 +266,37 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 		}
 	};
 
+	const deleteInspection = async (item: PortfolioInspectionJob) => {
+		if (!config || item.status === 'running' || deletingInspectionID) return;
+		if (!window.confirm('确定删除这条巡检记录？删除后不可恢复。')) return;
+		setDeletingInspectionID(item.id);
+		setError('');
+		try {
+			await requestJSON(config, `/api/v1/portfolio-inspections/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+			setHistory((current) => current.filter((entry) => entry.id !== item.id));
+			if (job?.id === item.id) setJob(null);
+			setNotice('巡检记录已删除');
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : '删除巡检记录失败');
+		} finally {
+			setDeletingInspectionID('');
+		}
+	};
+
 	return <div className="portfolio-inspection-workspace">
 		<aside className="portfolio-history" aria-label="巡检历史">
 			<header><History size={16} /><div><strong>巡检记录</strong><small>本机保存</small></div></header>
-			<div>
+			<div className="portfolio-history-list">
 				{loading && <span className="portfolio-history-empty"><LoaderCircle className="spin" size={17} />正在读取</span>}
 				{!loading && history.length === 0 && <span className="portfolio-history-empty">暂无报告</span>}
-				{history.map((item) => <button type="button" className={job?.id === item.id ? 'active' : ''} onClick={() => setJob(item)} key={item.id}>
-					<span>{item.status === 'running' ? <LoaderCircle className="spin" size={14} /> : item.status === 'succeeded' ? <CheckCircle2 size={14} /> : <CircleAlert size={14} />}</span>
-					<div><strong>{item.request.holdings.length} 只持仓 · {profileLabel(item.request.trader_profile)}</strong><small>{inspectionProviderLabel(item.request.ai_provider)}{item.request.model ? ` · ${item.request.model} / ${item.request.reasoning_effort || '默认'}` : ''}</small><small>{formatDate(item.updated_at || item.started_at)}</small></div>
-					<ChevronRight size={14} />
-				</button>)}
+				{history.map((item) => <div className={`portfolio-history-item ${job?.id === item.id ? 'active' : ''}`} key={item.id}>
+					<button type="button" className="portfolio-history-select" onClick={() => setJob(item)}>
+						<span>{item.status === 'running' ? <LoaderCircle className="spin" size={14} /> : item.status === 'succeeded' ? <CheckCircle2 size={14} /> : <CircleAlert size={14} />}</span>
+						<div><strong>{item.request.holdings.length} 只持仓 · {profileLabel(item.request.trader_profile)}</strong><small>{inspectionProviderLabel(item.request.ai_provider)}{item.request.model ? ` · ${item.request.model} / ${item.request.reasoning_effort || '默认'}` : ''}</small><small>{formatDate(item.updated_at || item.started_at)}</small></div>
+						<ChevronRight size={14} />
+					</button>
+					<button type="button" className="portfolio-history-delete" aria-label="删除巡检记录" title={item.status === 'running' ? '任务运行中' : '删除记录'} disabled={item.status === 'running' || deletingInspectionID === item.id} onClick={() => void deleteInspection(item)}><Trash2 size={13} /></button>
+				</div>)}
 			</div>
 		</aside>
 
@@ -287,22 +306,22 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 
 			{(!job?.report || job.status === 'running') && <>
 				<section className="portfolio-runtime-picker" aria-label="持仓巡检 AI 运行时">
-					<header><Activity size={17} /><div><strong>巡检 AI 接入</strong><small>独立于 AI 对话设置；逐股分析与组合总结使用同一运行时</small></div>{runtimeLoading && <LoaderCircle className="spin" size={15} />}</header>
+					<header><Activity size={17} /><div><strong>巡检 AI 接入</strong><small>与系统共用运行时、桥节点和模型</small></div>{runtimeLoading && <LoaderCircle className="spin" size={15} />}</header>
 					<div className="portfolio-runtime-fields">
-						<label><span>运行时</span><select aria-label="持仓巡检运行时" value={runtimePreference.provider} disabled={Boolean(running) || starting} onChange={(event) => chooseProvider(event.target.value as InspectionRuntimePreference['provider'])}><option value="hermes">Hermes</option><option value="codex_desktop">桌面 Codex</option><option value="antigravity_desktop">桌面 Antigravity</option></select></label>
+						<label><span>运行时</span><select aria-label="持仓巡检运行时" value={runtimePreference.provider} disabled={Boolean(running) || starting || runtimeLoading} onChange={(event) => chooseProvider(event.target.value as InspectionRuntimePreference['provider'])}><option value="hermes">Hermes</option><option value="codex_desktop">桌面 Codex</option><option value="antigravity_desktop">桌面 Antigravity</option></select></label>
 						{isInspectionDesktopProvider(runtimePreference.provider) && <>
-							<label><span>桌面桥</span><select aria-label="持仓巡检桌面桥" value={selectedTarget ? `${selectedTarget.node_id}::${selectedTarget.workspace_id}` : ''} disabled={Boolean(running) || starting || providerTargets.length === 0} onChange={(event) => chooseTarget(providerTargets.find((target) => `${target.node_id}::${target.workspace_id}` === event.target.value) || null)}><option value="">{providerTargets.length ? '选择在线桌面桥' : '当前没有在线可用桥'}</option>{providerTargets.map((target) => <option value={`${target.node_id}::${target.workspace_id}`} key={`${target.node_id}:${target.workspace_id}`}>{runtimeNodeLabel(target)}</option>)}</select></label>
-							<label><span>模型</span><select aria-label="持仓巡检模型" value={selectedModelGroup?.id || ''} disabled={Boolean(running) || starting || !selectedTarget || modelGroups.length === 0} onChange={(event) => chooseModel(modelGroups.find((group) => group.id === event.target.value))}><option value="">{selectedTarget ? '选择可用模型' : '等待桌面桥'}</option>{modelGroups.map((group) => <option value={group.id} key={group.id}>{group.name}</option>)}</select></label>
-							<label><span>推理强度</span><select aria-label="持仓巡检推理强度" value={resolvedModel?.reasoning_effort || ''} disabled={Boolean(running) || starting || !selectedModelGroup} onChange={(event) => chooseEffort(event.target.value)}>{selectedModelGroup?.efforts.map((effort) => <option value={effort} key={effort}>{effort}</option>) || <option value="">无可用档位</option>}</select></label>
+							<label><span>桌面桥</span><select aria-label="持仓巡检桌面桥" value={selectedTarget ? `${selectedTarget.node_id}::${selectedTarget.workspace_id}` : ''} disabled={Boolean(running) || starting || runtimeLoading || providerTargets.length === 0} onChange={(event) => chooseTarget(providerTargets.find((target) => `${target.node_id}::${target.workspace_id}` === event.target.value) || null)}><option value="">{providerTargets.length ? '选择在线桌面桥' : '当前没有在线可用桥'}</option>{providerTargets.map((target) => <option value={`${target.node_id}::${target.workspace_id}`} key={`${target.node_id}:${target.workspace_id}`}>{runtimeNodeLabel(target)}</option>)}</select></label>
+							<label><span>模型</span><select aria-label="持仓巡检模型" value={selectedModelGroup?.id || ''} disabled={Boolean(running) || starting || runtimeLoading || !selectedTarget || modelGroups.length === 0} onChange={(event) => chooseModel(modelGroups.find((group) => group.id === event.target.value))}><option value="">{selectedTarget ? '选择可用模型' : '等待桌面桥'}</option>{modelGroups.map((group) => <option value={group.id} key={group.id}>{group.name}</option>)}</select></label>
+							<label><span>推理强度</span><select aria-label="持仓巡检推理强度" value={resolvedModel?.reasoning_effort || ''} disabled={Boolean(running) || starting || runtimeLoading || !selectedModelGroup} onChange={(event) => chooseEffort(event.target.value)}>{selectedModelGroup?.efforts.map((effort) => <option value={effort} key={effort}>{effort}</option>) || <option value="">无可用档位</option>}</select></label>
 						</>}
 					</div>
-					<div className={`portfolio-runtime-status ${runtimeReady ? 'ready' : 'unavailable'}`} role="status">
-						{!runtimeChecked ? '正在检查运行时与桥能力…' : runtimePreference.provider === 'hermes' ? runtimeReady ? 'Hermes 已配置，可用于持仓巡检' : runtimeMessage || 'Hermes 运行时未配置' : selectedTarget && resolvedModel ? `在线：${runtimeNodeLabel(selectedTarget)} · ${resolvedModel.model} / ${resolvedModel.reasoning_effort}` : `没有在线且支持个股研究的${inspectionDesktopProviderLabel(runtimePreference.provider)}桥，巡检暂不可启动`}
+					<div className={`portfolio-runtime-status ${runtimeReady ? 'ready' : 'unavailable'}`} role="status" title={selectedTarget && resolvedModel ? `${runtimeNodeLabel(selectedTarget)} · ${resolvedModel.model} / ${resolvedModel.reasoning_effort}` : undefined}>
+						{!runtimeChecked ? '检查运行时…' : runtimePreference.provider === 'hermes' ? runtimeReady ? 'Hermes 已就绪' : runtimeMessage || 'Hermes 未配置' : selectedTarget && resolvedModel ? `系统统一 · ${runtimeNodeLabel(selectedTarget)} · ${resolvedModel.model} / ${resolvedModel.reasoning_effort}` : `${inspectionDesktopProviderLabel(runtimePreference.provider)} 桥不可用 · 暂不能巡检`}
 						{runtimePreference.provider === 'hermes' && !runtimeReady && <button type="button" onClick={onOpenSettings}>打开系统设置</button>}
 					</div>
 					{runtimeNotice && <div className="portfolio-runtime-notice"><CheckCircle2 size={14} /><span>{runtimeNotice}</span></div>}
 				</section>
-				<PortfolioSetupForm draft={draft} directory={directory} disabled={Boolean(running)} submitDisabled={!runtimeChecked || !runtimeReady} busy={starting || Boolean(running)} actionLabel="开始 AI 巡检" busyLabel={running ? '巡检进行中' : '正在启动'} onChange={setDraft} onSubmit={() => void startInspection()} />
+				<PortfolioSetupForm draft={draft} directory={directory} disabled={Boolean(running)} submitDisabled={!runtimeChecked || !runtimeReady || runtimeLoading} busy={starting || Boolean(running) || runtimeLoading} actionLabel="开始 AI 巡检" busyLabel={running ? '巡检进行中' : '正在启动'} onChange={setDraft} onSubmit={() => void startInspection()} />
 			</>}
 
 			{job?.status === 'running' && <InspectionProgress job={job} />}

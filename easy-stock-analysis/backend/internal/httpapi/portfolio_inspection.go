@@ -100,6 +100,27 @@ func (s *Server) portfolioInspectionGet(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"data": job})
 }
 
+func (s *Server) portfolioInspectionDelete(w http.ResponseWriter, r *http.Request) {
+	if s.portfolioInspection == nil {
+		writeError(w, http.StatusServiceUnavailable, "持仓巡检服务不可用")
+		return
+	}
+	err := s.portfolioInspection.Delete(r.Context(), strings.TrimSpace(r.PathValue("id")))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "未找到持仓巡检记录")
+		return
+	}
+	if errors.Is(err, portfolioinspection.ErrDeleteRunningJob) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]bool{"deleted": true}})
+}
+
 func (s *Server) portfolioInspectionList(w http.ResponseWriter, r *http.Request) {
 	if s.portfolioInspection == nil {
 		writeError(w, http.StatusServiceUnavailable, "持仓巡检服务不可用")

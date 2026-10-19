@@ -23,7 +23,7 @@ import {
 	Trash2,
 	X,
 } from 'lucide-react';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppSettings, BackendConfig, BrowserAuthStatus, LLMConnectionTestResult, LLMModelOption, LLMModelsResult, LLMProfile, ReviewAutomationProfile, RuntimeLogStatus, SecretSettingStatus, WechatServiceStatus, requestJSON } from '../lib/backend';
 import { llmProviderDefinition, llmProviders } from '../lib/llm-providers';
 import { AppUpdatePanel } from './AppUpdatePanel';
@@ -84,7 +84,11 @@ export function SettingsDrawer({ config, open, onClose, onSaved }: Props) {
 	const [wechatLoginBaseline, setWechatLoginBaseline] = useState('');
 	const [runtimeLogStatus, setRuntimeLogStatus] = useState<RuntimeLogStatus | null>(null);
 	const [openingRuntimeLogs, setOpeningRuntimeLogs] = useState(false);
+	const [runtimeBusy, setRuntimeBusy] = useState(false);
 	const modelFetchSequence = useRef(0);
+	const runtimeSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+	const registerRuntimeSave = useCallback((saveRuntime: (() => Promise<boolean>) | null) => { runtimeSaveRef.current = saveRuntime; }, []);
+	const reportRuntimeBusy = useCallback((busy: boolean) => setRuntimeBusy(busy), []);
 
 	useEffect(() => {
 		if (!open) return;
@@ -422,9 +426,10 @@ export function SettingsDrawer({ config, open, onClose, onSaved }: Props) {
 		setState('saving');
 		setMessage('');
 		try {
+			const runtimeSaved = await runtimeSaveRef.current?.() || false;
 			await persistSettings();
 			setState('saved');
-			setMessage('设置已同步到本机 Hermes');
+			setMessage(runtimeSaved ? '系统设置与统一 AI 运行时已保存' : '设置已同步到本机 Hermes');
 			onSaved?.();
 		} catch (error) {
 			setState('error');
@@ -485,7 +490,7 @@ export function SettingsDrawer({ config, open, onClose, onSaved }: Props) {
 						</section>
 
 						<LinkageDefaultSettings config={config} open={open} />
-						<ChatRuntimeSettingsPanel config={config} open={open} />
+						<ChatRuntimeSettingsPanel config={config} open={open} onRegisterSave={registerRuntimeSave} onBusyChange={reportRuntimeBusy} />
 						<HermesAgentSettingsPanel config={config} open={open} />
 
 						<section className="settings-section">
@@ -558,7 +563,7 @@ export function SettingsDrawer({ config, open, onClose, onSaved }: Props) {
 						<footer className="settings-footer">
 							<div className={`settings-message ${state}`}>{state === 'saved' && <CheckCircle2 size={15} />}{state === 'error' && <KeyRound size={15} />}<span>{message || '留空的模型密钥会保留 Hermes .env 中的现有值。'}</span></div>
 							<button type="button" onClick={onClose}>取消</button>
-							<button type="submit" className="settings-save" disabled={!config || state === 'saving' || testState === 'testing'}>{state === 'saving' ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}保存设置</button>
+							<button type="submit" className="settings-save" disabled={!config || state === 'saving' || testState === 'testing' || runtimeBusy}>{state === 'saving' ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}保存全部设置</button>
 						</footer>
 					</form>
 				)}

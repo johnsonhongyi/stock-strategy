@@ -216,6 +216,21 @@ func (s *Store) List(ctx context.Context, limit int) ([]Job, error) {
 	return jobs, rows.Err()
 }
 
+func (s *Store) Delete(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM portfolio_inspection_jobs WHERE id=?`, strings.TrimSpace(id))
+	if err != nil {
+		return fmt.Errorf("delete portfolio inspection job: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check deleted portfolio inspection job: %w", err)
+	}
+	if deleted == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *Store) MarkInterrupted(ctx context.Context) error {
 	rows, err := s.db.QueryContext(ctx, `SELECT content_json FROM portfolio_inspection_jobs WHERE status='running'`)
 	if err != nil {

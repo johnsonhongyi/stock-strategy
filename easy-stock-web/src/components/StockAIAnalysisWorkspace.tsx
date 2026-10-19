@@ -71,8 +71,8 @@ import {
 	searchStockDirectory,
 	signedPercent,
 } from '../lib/stock-analysis';
-import { loadAvailableDesktopChatTargets, loadChatRuntime, isDesktopChatProvider, targetsForDesktopProvider, desktopChatProviderLabel, type AvailableDesktopChatTarget, type ChatRuntime } from '../lib/desktop-chat';
-import { readStockAIModelPreference as readStoredStockAIModelPreference, saveStockAIModelPreference as saveStoredStockAIModelPreference, type StockAIModelPreference, type StockAIProvider } from '../lib/stock-ai-model-preference';
+import { loadAvailableDesktopChatTargets, loadChatRuntime, saveChatRuntime, isDesktopChatProvider, targetsForDesktopProvider, desktopChatProviderLabel, type AvailableDesktopChatTarget, type ChatRuntime, type ChatRuntimeConfig } from '../lib/desktop-chat';
+import type { StockAIProvider } from '../lib/stock-ai-model-preference';
 import { useStockResearch } from '../lib/use-stock-research';
 import { isResearchRunning, researchPlanText, type ResearchAnalysisLevel, type ResearchRequest } from '../lib/stock-research';
 import { StockResearchHistory, StockResearchOptions, StockResearchProgress, StockResearchReportView } from './StockResearchReport';
@@ -128,22 +128,8 @@ function readResearchAnalysisLevel(): ResearchAnalysisLevel {
 
 type DirectoryState = 'idle' | 'loading' | 'cached' | 'ready' | 'error';
 type HotRankState = 'idle' | 'loading' | 'ready' | 'error';
-function getStockAIStorage(): Storage | null {
-	try { return window.localStorage; } catch { return null; }
-}
-
-function readStockAIModelPreference(provider?: StockAIProvider): StockAIModelPreference {
-	const storage = getStockAIStorage();
-	return storage ? readStoredStockAIModelPreference(storage, provider) : {};
-}
-
 function stockBridgeIdentity(target: Pick<AvailableDesktopChatTarget, 'node_id' | 'workspace_id'> | null) {
 	return target ? `${target.node_id.slice(0, 8)} / ${target.workspace_id.slice(0, 8)}` : '';
-}
-
-function saveStockAIModelPreference(provider: StockAIProvider, model: string, effort: string, target: Pick<AvailableDesktopChatTarget, 'node_id' | 'workspace_id'> | null) {
-	const storage = getStockAIStorage();
-	if (storage) saveStoredStockAIModelPreference(storage, provider, model, effort, target);
 }
 
 
@@ -176,6 +162,8 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 	const [hotStockSidebarCollapsed, setHotStockSidebarCollapsed] = useState(() => readStoredValue(hotStockSidebarStorageKey) === '1');
 	const [llmProfiles, setLLMProfiles] = useState<LLMProfile[]>([]);
 	const [activeLLMProfileID, setActiveLLMProfileID] = useState('');
+	const [systemRuntime, setSystemRuntime] = useState<ChatRuntimeConfig | null>(null);
+	const [runtimeRevision, setRuntimeRevision] = useState(0);
 	const [desktopRuntime, setDesktopRuntime] = useState<ChatRuntime | null>(null);
 	const [codexTarget, setCodexTarget] = useState<AvailableDesktopChatTarget | null>(null);
 	const [codexBridgeNotice, setCodexBridgeNotice] = useState('');
@@ -188,6 +176,26 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 	const analysisRequestSequence = useRef(0);
 	const analysisAbortController = useRef<AbortController | null>(null);
 	const analysisRef = useRef<StockAIAnalysis | null>(null);
+	const persistSystemRuntime = async (next: ChatRuntimeConfig, target: AvailableDesktopChatTarget | null) => {
+		if (!config) return false;
+		setAIChoiceBusy(true);
+		try {
+			const saved = await saveChatRuntime(config, next);
+			setSystemRuntime(saved.config);
+			setAnalysisProvider(saved.config.provider);
+			setCodexModel(saved.config.model);
+			setCodexEffort(saved.config.reasoning_effort);
+			setCodexTarget(target);
+			setDesktopRuntime(target ? { ...target.runtime, config: saved.config } : null);
+			window.dispatchEvent(new Event('ai-runtime-changed'));
+			return true;
+		} catch (cause) {
+			setCodexBridgeNotice('系统 AI 运行时保存失败：' + (cause instanceof Error ? cause.message : String(cause)));
+			return false;
+		} finally {
+			setAIChoiceBusy(false);
+		}
+	};
 	const initialSymbolHandled = useRef('');
 	const lastRefreshKey = useRef(0);
 	analysisRef.current = analysis;
@@ -199,58 +207,70 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 		const settingsRequest = requestJSON<{ data: AppSettings }>(config, '/api/v1/settings').then((settings) => settings.data).catch(() => null);
 		const runtimeRequest = loadChatRuntime(config).catch(() => null);
 		const researchTargetsRequest = loadAvailableDesktopChatTargets(config, 'stock_research_v1').catch(() => null);
-		void Promise.all([settingsRequest, runtimeRequest, researchTargetsRequest]).then(([settings, runtime, available]) => {
+		void Promise.all([settingsRequest, runtimeRequest, researchTargetsRequest]).then(async ([settings, runtime, available]) => {
 			if (cancelled) return;
 			const profiles = settings?.llm_profiles || [];
 			setLLMProfiles(profiles);
 			setActiveLLMProfileID(settings?.active_llm_profile_id || profiles[0]?.id || '');
-			const activePreference = readStockAIModelPreference();
 			const targets = available?.targets || [];
-			const suggestedTarget = targets.find((item) => item.node_id === activePreference.node_id && item.workspace_id === activePreference.workspace_id)
-				|| targets.find((item) => item.node_id === runtime?.config.node_id && item.workspace_id === runtime?.config.workspace_id)
-				|| targets.find((item) => item.node_id === available?.strategyTarget?.node_id && item.workspace_id === available?.strategyTarget?.workspace_id)
-				|| targets[0] || null;
-			const defaultProvider: StockAIProvider = isDesktopChatProvider(runtime?.config.provider) ? runtime.config.provider : profiles.length === 0 && suggestedTarget ? suggestedTarget.provider : 'hermes';
-			const provider = activePreference.provider === 'antigravity_desktop' || activePreference.provider === 'codex_desktop' ? activePreference.provider : activePreference.provider === 'hermes' ? 'hermes' : defaultProvider;
-			const preference = readStockAIModelPreference(provider);
+			const provider: StockAIProvider = runtime?.config.provider || 'hermes';
 			const providerTargets = isDesktopChatProvider(provider) ? targetsForDesktopProvider(targets, provider) : [];
 			const target = isDesktopChatProvider(provider)
-				? providerTargets.find((item) => item.node_id === preference.node_id && item.workspace_id === preference.workspace_id)
+				? providerTargets.find((item) => item.node_id === runtime?.config.node_id && item.workspace_id === runtime?.config.workspace_id)
 					|| providerTargets.find((item) => item.node_id === available?.strategyTarget?.node_id && item.workspace_id === available?.strategyTarget?.workspace_id)
-					|| providerTargets.find((item) => item.node_id === runtime?.config.node_id && item.workspace_id === runtime?.config.workspace_id)
 					|| providerTargets[0] || null
-				: suggestedTarget;
+				: null;
 			const codexRuntime = target?.runtime || null;
-			const codexReady = Boolean(target && codexRuntime?.online && codexRuntime.models.length > 0);
-			const preferredEffort = preference.reasoning_effort || codexRuntime?.config.reasoning_effort || '';
-			const selected = resolveAvailableDesktopModelSelection(codexRuntime?.models || [], provider,
-				preference.model || codexRuntime?.config.model || '', preferredEffort);
+			const selected = target && isDesktopChatProvider(provider)
+				? resolveAvailableDesktopModelSelection(codexRuntime?.models || [], provider, runtime?.config.model || codexRuntime?.config.model || '', runtime?.config.reasoning_effort || codexRuntime?.config.reasoning_effort || '')
+				: null;
 			const model = codexRuntime?.models.find(item => item.id === selected?.model);
-			const effort = selected?.reasoning_effort || '';
+			const effort = selected?.reasoning_effort || runtime?.config.reasoning_effort || '';
+			let resolvedRuntimeConfig = runtime?.config || null;
+			if (runtime?.config && target && selected && isDesktopChatProvider(provider)) {
+				const aligned = { ...runtime.config, node_id: target.node_id, workspace_id: target.workspace_id, model: selected.model, reasoning_effort: selected.reasoning_effort };
+				if (JSON.stringify(aligned) !== JSON.stringify(runtime.config)) {
+					const saved = await saveChatRuntime(config, aligned);
+					resolvedRuntimeConfig = saved.config;
+					window.dispatchEvent(new Event('ai-runtime-changed'));
+				}
+			}
+			if (cancelled) return;
+			setSystemRuntime(resolvedRuntimeConfig);
 			setCodexTarget(target);
 			setDesktopRuntime(codexRuntime);
 			setAnalysisProvider(provider);
-			setCodexModel(model?.id || preference.model || '');
+			setCodexModel(model?.id || resolvedRuntimeConfig?.model || '');
 			setCodexEffort(effort);
-			if (!target) setCodexBridgeNotice('未发现在线且支持个股研究的桌面桥；启动管理器桥后会自动发现。');
-			else if (preference.node_id && (preference.node_id !== target.node_id || preference.workspace_id !== target.workspace_id)) setCodexBridgeNotice(`原个股研究桥 ${preference.node_id.slice(0, 8)} / ${preference.workspace_id?.slice(0, 8) || '未知'} 已离线，已切换到 ${stockBridgeIdentity(target)}。`);
-			else setCodexBridgeNotice(`个股策略桥 ${stockBridgeIdentity(target)}；与 AI 对话桥选择独立。`);
-			if (target && (provider === 'codex_desktop' || provider === 'antigravity_desktop')) saveStockAIModelPreference(provider, model?.id || preference.model || '', effort, target);
+			if (isDesktopChatProvider(provider) && !target) setCodexBridgeNotice('系统设置中的桌面桥当前未在线或不支持个股研究；请在系统设置中选择可用桥。');
+			else if (target && runtime?.config.node_id && (runtime.config.node_id !== target.node_id || runtime.config.workspace_id !== target.workspace_id)) setCodexBridgeNotice(`系统设置中的原桥已离线，已统一切换到 ${stockBridgeIdentity(target)}。`);
+			else if (target) setCodexBridgeNotice(`已与系统设置统一：${stockBridgeIdentity(target)} · ${selected?.model || ''} / ${effort}`);
+			else setCodexBridgeNotice('个股分析与 AI 对话共用系统设置中的 Hermes 运行时。');
 			setModelRuntimeReady(true);
 		}).catch(() => {
 			if (!cancelled) {
-				const preference = readStockAIModelPreference(analysisProvider);
+				setSystemRuntime(null);
 				setDesktopRuntime(null);
 				setCodexTarget(null);
-				setAnalysisProvider(preference.provider || 'hermes');
-				setCodexModel(preference.model || '');
-				setCodexEffort(preference.reasoning_effort || '');
-				setCodexBridgeNotice('桌面桥目录读取失败；个股分析设置与 AI 对话设置保持独立。');
+				setAnalysisProvider('hermes');
+				setCodexModel('');
+				setCodexEffort('');
+				setCodexBridgeNotice('系统 AI 运行时读取失败，请检查系统设置中的运行时连接。');
 				setModelRuntimeReady(true);
 			}
 		});
 		return () => { cancelled = true; };
-	}, [config, refreshKey]);
+	}, [config, refreshKey, runtimeRevision]);
+
+	useEffect(() => {
+		const refresh = () => setRuntimeRevision((value) => value + 1);
+		window.addEventListener('ai-runtime-changed', refresh);
+		window.addEventListener('ai-runtime-failed-over', refresh);
+		return () => {
+			window.removeEventListener('ai-runtime-changed', refresh);
+			window.removeEventListener('ai-runtime-failed-over', refresh);
+		};
+	}, []);
 
 	useEffect(() => {
 		if (!config || (analysisProvider !== 'codex_desktop' && analysisProvider !== 'antigravity_desktop')) return;
@@ -260,14 +280,16 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 			if (refreshing || document.visibilityState === 'hidden' || state === 'loading' || state === 'refining') return;
 			refreshing = true;
 			try {
-				const available = await loadAvailableDesktopChatTargets(config, 'stock_research_v1');
+				const [available, currentRuntime] = await Promise.all([
+					loadAvailableDesktopChatTargets(config, 'stock_research_v1'),
+					loadChatRuntime(config),
+				]);
 				if (cancelled) return;
+				if (currentRuntime.config.provider !== analysisProvider) { setRuntimeRevision((value) => value + 1); return; }
 				const providerTargets = targetsForDesktopProvider(available.targets, analysisProvider);
 				const configured = providerTargets.find((item) => item.node_id === available.strategyTarget?.node_id && item.workspace_id === available.strategyTarget?.workspace_id);
-				const current = codexTarget && providerTargets.find((item) => item.node_id === codexTarget.node_id && item.workspace_id === codexTarget.workspace_id);
-				const preference = readStockAIModelPreference(analysisProvider);
-				const saved = providerTargets.find((item) => item.node_id === preference.node_id && item.workspace_id === preference.workspace_id);
-				const target = configured || current || saved || providerTargets[0] || null;
+				const target = providerTargets.find((item) => item.node_id === currentRuntime.config.node_id && item.workspace_id === currentRuntime.config.workspace_id)
+					|| configured || providerTargets[0] || null;
 				if (!target) {
 					setDesktopRuntime(null);
 					if (codexTarget) {
@@ -277,18 +299,26 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 					return;
 				}
 				const changed = !codexTarget || codexTarget.node_id !== target.node_id || codexTarget.workspace_id !== target.workspace_id;
-				const selected = resolveAvailableDesktopModelSelection(target.runtime.models, analysisProvider, codexModel, codexEffort);
+				const selected = resolveAvailableDesktopModelSelection(target.runtime.models, analysisProvider, currentRuntime.config.model, currentRuntime.config.reasoning_effort);
 				const model = target.runtime.models.find(item => item.id === selected?.model);
 				const effort = selected?.reasoning_effort || '';
 				setDesktopRuntime(target.runtime);
 				setCodexTarget(target);
 				if (model?.id) setCodexModel(model.id);
 				setCodexEffort(effort);
+				const aligned = selected ? { ...currentRuntime.config, node_id: target.node_id, workspace_id: target.workspace_id, model: selected.model, reasoning_effort: selected.reasoning_effort } : currentRuntime.config;
+				if (JSON.stringify(aligned) !== JSON.stringify(currentRuntime.config)) {
+					const saved = await saveChatRuntime(config, aligned);
+					if (cancelled) return;
+					setSystemRuntime(saved.config);
+					setCodexModel(saved.config.model);
+					setCodexEffort(saved.config.reasoning_effort);
+					window.dispatchEvent(new Event('ai-runtime-changed'));
+				}
 				if (changed) {
 					setCodexBridgeNotice(codexTarget
-						? `原个股研究桥 ${stockBridgeIdentity(codexTarget)} 已离线或不再是策略目标，已自动切换到 ${stockBridgeIdentity(target)}。`
-						: `已自动连接个股策略桥 ${stockBridgeIdentity(target)}。`);
-					saveStockAIModelPreference(analysisProvider, model?.id || codexModel, effort, target);
+						? `系统设置中的原桥 ${stockBridgeIdentity(codexTarget)} 已离线，已自动切换并保存到 ${stockBridgeIdentity(target)}。`
+						: `已按系统设置连接个股研究桥 ${stockBridgeIdentity(target)}。`);
 				}
 			} catch {
 				if (!cancelled && !codexTarget) setCodexBridgeNotice('桌面桥心跳暂不可读取，正在继续检查可用节点。');
@@ -298,66 +328,45 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 		};
 		const stop = startAutoRefresh(refreshBridge, 20_000);
 		return () => { cancelled = true; stop(); };
-	}, [config, analysisProvider, state, codexTarget, codexModel, codexEffort]);
+	}, [config, analysisProvider, state, codexTarget]);
 
 	const changeAnalysisProvider = async (provider: StockAIProvider) => {
-		setAnalysisProvider(provider);
-		if (!isDesktopChatProvider(provider)) {
-			saveStockAIModelPreference(provider, codexModel, codexEffort, codexTarget);
-			return;
-		}
-		if (!config) return;
-		setAIChoiceBusy(true);
+		if (!config || aiChoiceBusy) return;
 		try {
-			const available = await loadAvailableDesktopChatTargets(config, 'stock_research_v1');
-			const providerTargets = targetsForDesktopProvider(available.targets, provider);
-			const target = providerTargets.find((item) => item.node_id === available.strategyTarget?.node_id && item.workspace_id === available.strategyTarget?.workspace_id)
-				|| providerTargets.find((item) => item.node_id === codexTarget?.node_id && item.workspace_id === codexTarget?.workspace_id)
-				|| providerTargets[0] || null;
-			if (!target) {
-				setDesktopRuntime(null);
-				setCodexTarget(null);
-				setCodexModel('');
-				setCodexEffort('');
-				setCodexBridgeNotice(`没有在线且支持个股研究的${desktopChatProviderLabel(provider)}桥；不会切换到另一种桌面引擎。`);
-				saveStockAIModelPreference(provider, '', '', null);
+			const current = systemRuntime || (await loadChatRuntime(config)).config;
+			if (!isDesktopChatProvider(provider)) {
+				await persistSystemRuntime({ ...current, provider }, null);
 				return;
 			}
-			const preference = readStockAIModelPreference(provider);
-			const preferredEffort = preference.reasoning_effort || target.runtime.config.reasoning_effort || '';
+			const available = await loadAvailableDesktopChatTargets(config, 'stock_research_v1');
+			const providerTargets = targetsForDesktopProvider(available.targets, provider);
+			const target = providerTargets.find((item) => item.node_id === current.node_id && item.workspace_id === current.workspace_id)
+				|| providerTargets.find((item) => item.node_id === available.strategyTarget?.node_id && item.workspace_id === available.strategyTarget?.workspace_id)
+				|| providerTargets[0] || null;
+			if (!target) {
+				setCodexBridgeNotice(`没有在线且支持个股研究的${desktopChatProviderLabel(provider)}桥；不会切换到另一种桌面引擎。`);
+				return;
+			}
 			const selected = resolveAvailableDesktopModelSelection(target.runtime.models, provider,
-				preference.model || target.runtime.config.model, preferredEffort);
-			const model = target.runtime.models.find(item => item.id === selected?.model);
-			const effort = selected?.reasoning_effort || '';
-			setCodexTarget(target);
-			setDesktopRuntime(target.runtime);
-			setCodexModel(model?.id || '');
-			setCodexEffort(effort);
-			setCodexBridgeNotice(`已选择${desktopChatProviderLabel(provider)}个股研究桥 ${stockBridgeIdentity(target)}。`);
-			saveStockAIModelPreference(provider, model?.id || '', effort, target);
+				current.model || target.runtime.config.model, current.reasoning_effort || target.runtime.config.reasoning_effort);
+			if (!selected) throw new Error('所选桌面桥没有可用模型或推理强度');
+			const saved = await persistSystemRuntime({ ...current, provider, node_id: target.node_id, workspace_id: target.workspace_id, ...selected }, target);
+			if (saved) setCodexBridgeNotice(`已统一切换到${desktopChatProviderLabel(provider)}：${stockBridgeIdentity(target)}；此选择同步至系统设置、AI 对话和持仓巡检。`);
 		} catch (error) {
-			setDesktopRuntime(null);
-			setCodexTarget(null);
-			setCodexBridgeNotice('读取桌面桥目录失败：' + (error instanceof Error ? error.message : String(error)));
-		} finally {
-			setAIChoiceBusy(false);
+			setCodexBridgeNotice('系统运行时切换失败：' + (error instanceof Error ? error.message : String(error)));
 		}
 	};
 
 	const changeCodexModel = (model: string) => {
 		const selected = resolveDesktopModelSelection(desktopRuntime?.models || [], analysisProvider, model, codexEffort);
 		if (!selected) return;
-		setCodexModel(selected.model);
-		setCodexEffort(selected.reasoning_effort);
-		saveStockAIModelPreference(analysisProvider, selected.model, selected.reasoning_effort, codexTarget);
+		if (systemRuntime) void persistSystemRuntime({ ...systemRuntime, ...selected }, codexTarget);
 	};
 
 	const changeCodexEffort = (reasoning_effort: string) => {
 		const selected = resolveDesktopModelSelection(desktopRuntime?.models || [], analysisProvider, codexModel, reasoning_effort);
 		if (!selected) return;
-		setCodexModel(selected.model);
-		setCodexEffort(selected.reasoning_effort);
-		saveStockAIModelPreference(analysisProvider, selected.model, selected.reasoning_effort, codexTarget);
+		if (systemRuntime) void persistSystemRuntime({ ...systemRuntime, ...selected }, codexTarget);
 	};
 	const switchResearchModel = async (profileID: string) => {
 		if (!config || !profileID || profileID === activeLLMProfileID || aiChoiceBusy) return;
@@ -443,39 +452,44 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 		writeStoredValue(symbolStorageKey, symbol);
 		try {
 			if (purpose === 'holding' && cost && (!(Number(cost) > 0) || !Number.isFinite(Number(cost)))) throw new Error('持仓成本须为正数');
+			const latestRuntime = await loadChatRuntime(config);
+			if (latestRuntime.config.provider !== analysisProvider) throw new Error('系统运行时已在其他位置变更；页面正在同步，请稍后重试。');
 			let requestTarget = codexTarget;
-			let requestModel = codexModel;
-			let requestEffort = codexEffort;
-			if (analysisProvider === 'codex_desktop' || analysisProvider === 'antigravity_desktop') {
+			let requestModel = latestRuntime.config.model;
+			let requestEffort = latestRuntime.config.reasoning_effort;
+			if (isDesktopChatProvider(latestRuntime.config.provider)) {
+				const desktopProvider = latestRuntime.config.provider;
 				const available = await loadAvailableDesktopChatTargets(config, 'stock_research_v1');
-				const preference = readStockAIModelPreference(analysisProvider);
-				const isAgv = analysisProvider === 'antigravity_desktop';
-				const pool = targetsForDesktopProvider(available.targets, analysisProvider);
-				requestTarget = pool.find((item) => item.node_id === preference.node_id && item.workspace_id === preference.workspace_id)
-					|| pool.find((item) => codexTarget && item.node_id === codexTarget.node_id && item.workspace_id === codexTarget.workspace_id)
+				const isAgv = desktopProvider === 'antigravity_desktop';
+				const pool = targetsForDesktopProvider(available.targets, desktopProvider);
+				requestTarget = pool.find((item) => item.node_id === latestRuntime.config.node_id && item.workspace_id === latestRuntime.config.workspace_id)
 					|| pool.find((item) => item.node_id === available.strategyTarget?.node_id && item.workspace_id === available.strategyTarget?.workspace_id)
 					|| pool[0] || null;
 				const activeTarget = requestTarget;
-				if (!activeTarget) throw new Error(`没有在线且支持个股研究的${desktopChatProviderLabel(analysisProvider)}桥；管理器桥恢复心跳后可自动重试。`);
-				const preferredEffort = preference.reasoning_effort || codexEffort || activeTarget.runtime.config.reasoning_effort;
-				const selected = resolveAvailableDesktopModelSelection(activeTarget.runtime.models, analysisProvider,
-					preference.model || codexModel || activeTarget.runtime.config.model, preferredEffort);
+				if (!activeTarget) throw new Error(`没有在线且支持个股研究的${desktopChatProviderLabel(desktopProvider)}桥；管理器桥恢复心跳后可自动重试。`);
+				const selected = resolveAvailableDesktopModelSelection(activeTarget.runtime.models, desktopProvider,
+					latestRuntime.config.model || activeTarget.runtime.config.model, latestRuntime.config.reasoning_effort || activeTarget.runtime.config.reasoning_effort);
 				if (!selected) throw new Error('活跃桌面桥没有可用模型目录。');
 				requestModel = selected.model;
 				requestEffort = selected.reasoning_effort;
 				if (!requestEffort) throw new Error('活跃桌面桥没有可用的思考强度。');
 				const bridgeName = isAgv ? 'Antigravity' : 'Codex';
 				if (codexTarget && (codexTarget.node_id !== activeTarget.node_id || codexTarget.workspace_id !== activeTarget.workspace_id)) {
-					setCodexBridgeNotice(`原个股研究桥 ${stockBridgeIdentity(codexTarget)} 已离线，已自动切换到 ${bridgeName} 桥 ${stockBridgeIdentity(activeTarget)}。`);
+					setCodexBridgeNotice(`系统设置中的原桥 ${stockBridgeIdentity(codexTarget)} 已离线，已自动切换到 ${bridgeName} 桥 ${stockBridgeIdentity(activeTarget)}。`);
 				} else {
-					setCodexBridgeNotice(`本次由 ${bridgeName} 个股策略桥 ${stockBridgeIdentity(activeTarget)} 执行；AI 对话设置未改变。`);
+					setCodexBridgeNotice(`本次由系统设置统一的 ${bridgeName} 桥 ${stockBridgeIdentity(activeTarget)} 执行。`);
 				}
 				requestTarget = activeTarget;
 				setCodexTarget(activeTarget);
 				setDesktopRuntime(activeTarget.runtime);
 				setCodexModel(requestModel);
 				setCodexEffort(requestEffort);
-				saveStockAIModelPreference(analysisProvider, requestModel, requestEffort, requestTarget);
+				const aligned = { ...latestRuntime.config, node_id: activeTarget.node_id, workspace_id: activeTarget.workspace_id, model: requestModel, reasoning_effort: requestEffort };
+				if (JSON.stringify(aligned) !== JSON.stringify(latestRuntime.config)) {
+					const saved = await saveChatRuntime(config, aligned);
+					setSystemRuntime(saved.config);
+					window.dispatchEvent(new Event('ai-runtime-changed'));
+				}
 			}
 			await research.start({
 				symbol, purpose, horizon, analysis_level: selectedLevel, ai_provider: analysisProvider,
@@ -487,7 +501,7 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 			setError(loadError instanceof Error ? loadError.message : '个股AI分析失败');
 			setState('error');
 		}
-	}, [config, directory, research.start, purpose, horizon, cost, researchLevel, analysisProvider, codexTarget, codexModel, codexEffort]);
+	}, [config, directory, research.start, purpose, horizon, cost, researchLevel, analysisProvider, codexTarget]);
 
 	const requestAnalysis = useCallback((rawSymbol: string) => {
 		const symbol = resolveStockDirectorySymbol(rawSymbol, directory);
@@ -877,7 +891,7 @@ function AnalysisSearch({ query, mode, directory, directoryState, onQuery, onSub
 				{(analysisProvider === 'codex_desktop' || analysisProvider === 'antigravity_desktop') ? <>
 					<label><span>模型</span><select value={selectedDesktopModel?.id || codexModel} onChange={(event) => onCodexModelChange(event.target.value)} disabled={choiceBusy || loading || !desktopRuntime?.online || !desktopRuntime.models.length} aria-label="桌面个股分析模型">{!selectedDesktopModel && <option value={codexModel}>{codexModel || '等待桌面模型目录'}</option>}{modelGroups.map((model) => <option value={model.id} key={model.id}>{model.name || model.id}</option>)}</select></label>
 					<label><span>思考</span>{selectedDesktopModel?.efforts.some(effort => effort !== 'auto') ? <select value={codexEffort} onChange={(event) => onCodexEffortChange(event.target.value)} disabled={choiceBusy || loading || !desktopRuntime?.online} aria-label="桌面个股分析思考强度">{selectedDesktopModel.efforts.map((effort) => <option value={effort} key={effort}>{effort === 'auto' ? '模型默认' : effort}</option>)}</select> : <small className="stock-ai-reasoning-unavailable">{selectedDesktopModel && analysisProvider === 'antigravity_desktop' ? '使用模型默认推理等级' : '当前模型未提供思考等级选项'}</small>}</label>
-					<small className="stock-ai-runtime-notice">{codexBridgeNotice || (desktopRuntime?.online ? `个股策略桥 ${codexTargetLabel}；与 AI 对话桥选择独立。` : '没有在线且支持个股研究的桌面桥。')}</small>
+					<small className="stock-ai-runtime-notice">{codexBridgeNotice || (desktopRuntime?.online ? `已与系统 AI 运行时统一：${codexTargetLabel}。` : '没有在线且支持个股研究的桌面桥。')}</small>
 				</> : <>
 					<label><span>模型</span><select value={activeLLMProfileID} onChange={(event) => onModelChange(event.target.value)} disabled={choiceBusy || loading || !llmProfiles.length} aria-label="完整分析模型"><option value="">当前模型</option>{llmProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name} · {profile.model}</option>)}</select></label>
 					<ReasoningControl config={config} refreshKey={JSON.stringify([activeLLMProfileID, llmProfiles.find((profile) => profile.id === activeLLMProfileID), refreshKey])} disabled={choiceBusy || loading} label="完整分析思考等级" />
