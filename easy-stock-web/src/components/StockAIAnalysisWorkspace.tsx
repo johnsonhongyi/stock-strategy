@@ -108,6 +108,7 @@ const historyStorageKey = 'easy-stock.stock-ai-history.v2';
 const capitalStorageKey = 'easy-stock.stock-ai-capital.v1';
 const directoryStorageKey = 'easy-stock.stock-directory.v1';
 const hotStockSidebarStorageKey = 'easy-stock.stock-ai-popular-sidebar-collapsed.v1';
+const researchLevelStorageKey = 'easy-stock.stock-ai-analysis-level.v1';
 const directoryStorageTTL = 24 * 60 * 60 * 1000;
 const examples = ['600519', '300750', '002594', '601138', '688981'];
 
@@ -120,6 +121,10 @@ const researchLevelOptions: Array<{ value: ResearchAnalysisLevel; title: string;
 
 function readStoredValue(key: string) { try { return window.localStorage.getItem(key) || ''; } catch { return ''; } }
 function writeStoredValue(key: string, value: string) { try { window.localStorage.setItem(key, value); } catch { /* Backend research history remains available. */ } }
+function readResearchAnalysisLevel(): ResearchAnalysisLevel {
+	const stored = readStoredValue(researchLevelStorageKey);
+	return researchLevelOptions.some((option) => option.value === stored) ? stored as ResearchAnalysisLevel : 'deep';
+}
 
 type DirectoryState = 'idle' | 'loading' | 'cached' | 'ready' | 'error';
 type HotRankState = 'idle' | 'loading' | 'ready' | 'error';
@@ -147,9 +152,13 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 	const [purpose, setPurpose] = useState<ResearchRequest['purpose']>('observe');
 	const [horizon, setHorizon] = useState<ResearchRequest['horizon']>('swing');
 	const [cost, setCost] = useState('');
-	const [researchLevel, setResearchLevel] = useState<ResearchAnalysisLevel>('deep');
+	const [researchLevel, setResearchLevel] = useState<ResearchAnalysisLevel>(readResearchAnalysisLevel);
 	const [levelDialogOpen, setLevelDialogOpen] = useState(false);
 	const [pendingAnalysisSymbol, setPendingAnalysisSymbol] = useState('');
+	const changeResearchLevel = useCallback((level: ResearchAnalysisLevel) => {
+		setResearchLevel(level);
+		writeStoredValue(researchLevelStorageKey, level);
+	}, []);
 	const [query, setQuery] = useState(() => readStoredValue(symbolStorageKey));
 	const [analysis, setAnalysis] = useState<StockAIAnalysis | null>(null);
 	const [history, setHistory] = useState<AnalysisHistoryItem[]>(loadAnalysisHistory);
@@ -406,7 +415,6 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 	useEffect(() => {
 		if (!research.job) return;
 		setQuery(research.job.request.symbol); setPurpose(research.job.request.purpose); setHorizon(research.job.request.horizon); setCost(research.job.request.cost_price?.toString() || '');
-		if (research.job.request.analysis_level) setResearchLevel(research.job.request.analysis_level);
 		// A restored report is a snapshot of the model used for that run. Keep the
 		// current selectors on the independently saved preference for the next run.
 	}, [research.job?.id]);
@@ -494,7 +502,6 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 			return;
 		}
 		setPendingAnalysisSymbol(symbol);
-		setResearchLevel('deep');
 		setLevelDialogOpen(true);
 	}, [analysis?.research_report, config, directory]);
 
@@ -649,7 +656,7 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 	return (
 		<section className="stock-ai-workspace">
 			<AnalysisSearch query={query} mode={mode} directory={directory} directoryState={directoryState} onQuery={setQuery} onSubmit={submit} loading={state === 'loading' || state === 'refining' || !modelRuntimeReady} llmProfiles={llmProfiles} activeLLMProfileID={activeLLMProfileID} config={config} refreshKey={String(refreshKey)} choiceBusy={aiChoiceBusy} onModelChange={(id) => void switchResearchModel(id)} desktopRuntime={desktopRuntime} codexBridgeNotice={codexBridgeNotice} codexTargetLabel={stockBridgeIdentity(codexTarget)} analysisProvider={analysisProvider} codexModel={codexModel} codexEffort={codexEffort} onProviderChange={changeAnalysisProvider} onCodexModelChange={changeCodexModel} onCodexEffortChange={changeCodexEffort} />
-			{levelDialogOpen && <ResearchLevelDialog value={researchLevel} runtimeLabel={analysisProvider === 'codex_desktop' ? `Codex Desktop · ${codexModel || '未选择模型'} / ${codexEffort || '思考等级不可用'}` : analysisProvider === 'antigravity_desktop' ? `Antigravity Desktop · ${codexModel || '未选择模型'} / ${codexEffort || '思考等级不可用'}` : 'Hermes · 使用当前模型配置'} onChange={setResearchLevel} onCancel={() => setLevelDialogOpen(false)} onConfirm={confirmResearchLevel} />}
+			{levelDialogOpen && <ResearchLevelDialog value={researchLevel} runtimeLabel={analysisProvider === 'codex_desktop' ? `Codex Desktop · ${codexModel || '未选择模型'} / ${codexEffort || '思考等级不可用'}` : analysisProvider === 'antigravity_desktop' ? `Antigravity Desktop · ${codexModel || '未选择模型'} / ${codexEffort || '思考等级不可用'}` : 'Hermes · 使用当前模型配置'} onChange={changeResearchLevel} onCancel={() => setLevelDialogOpen(false)} onConfirm={confirmResearchLevel} />}
 			<StockResearchOptions purpose={purpose} horizon={horizon} cost={cost} onPurpose={setPurpose} onHorizon={setHorizon} onCost={setCost} />
 			<div className={`stock-ai-shell ${hotStockSidebarCollapsed ? 'is-hot-collapsed' : ''}`.trim()}>
 					<HotStockSidebar data={hotRanks} state={hotRankState} error={hotRankError} activeSymbol={analysis?.symbol} collapsed={hotStockSidebarCollapsed} onToggle={toggleHotStockSidebar} onRefresh={() => void loadHotRanks(true)} onSelect={(symbol) => requestAnalysis(symbol)} />
