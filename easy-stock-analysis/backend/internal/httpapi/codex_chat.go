@@ -45,7 +45,7 @@ func (s *Server) chatDB() (*sql.DB, error) {
  CREATE TABLE IF NOT EXISTS desktop_chat_jobs(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,owner TEXT NOT NULL,node_id TEXT NOT NULL,workspace_id TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,lease_token TEXT NOT NULL DEFAULT '',lease_until INTEGER NOT NULL DEFAULT 0,result TEXT NOT NULL DEFAULT '{}');
  CREATE INDEX IF NOT EXISTS desktop_chat_claim ON desktop_chat_jobs(node_id,workspace_id,status,created_at);
  CREATE INDEX IF NOT EXISTS desktop_chat_session ON desktop_chat_jobs(session_id,status,expires_at);
- CREATE INDEX IF NOT EXISTS desktop_chat_expiry ON desktop_chat_jobs(expires_at);` + desktopUsageSchema)
+ CREATE INDEX IF NOT EXISTS desktop_chat_expiry ON desktop_chat_jobs(expires_at);` + desktopUsageSchema + automaticResearchSchema)
 	if err != nil {
 		db.Close()
 		return nil, err

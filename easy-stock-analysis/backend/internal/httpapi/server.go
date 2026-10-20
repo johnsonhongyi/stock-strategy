@@ -736,6 +736,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/settings/llm/test", s.settingsLLMTest)
 	s.mux.HandleFunc("GET /api/v1/ai/ws", s.aiChatWebSocket)
 	s.mux.HandleFunc("GET /api/v1/ai/runtime", s.desktopChatRuntime)
+	s.mux.HandleFunc("GET /api/v1/ai/auto-research", s.automaticResearch)
+	s.mux.HandleFunc("PUT /api/v1/ai/auto-research", s.automaticResearch)
 	s.mux.HandleFunc("PUT /api/v1/ai/runtime", s.desktopChatRuntime)
 	s.mux.HandleFunc("POST /api/v1/ai/desktop/jobs", s.desktopChatJob)
 	s.mux.HandleFunc("GET /api/v1/ai/desktop/jobs/{id}", s.desktopChatJob)

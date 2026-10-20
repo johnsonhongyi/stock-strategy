@@ -1,5 +1,6 @@
 import {LinkageDefaultSettings} from './LinkageDefaultSettings';
 import {ChatRuntimeSettingsPanel} from './ChatRuntimeSettingsPanel';
+import {AutomaticResearchSettingsPanel} from './AutomaticResearchSettingsPanel';
 import {
 	Bot,
 	CheckCircle2,
@@ -87,6 +88,8 @@ export function SettingsDrawer({ config, open, onClose, onSaved }: Props) {
 	const [runtimeBusy, setRuntimeBusy] = useState(false);
 	const modelFetchSequence = useRef(0);
 	const runtimeSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+	const automaticSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+	const registerAutomaticSave = useCallback((save: (() => Promise<boolean>) | null) => { automaticSaveRef.current = save; }, []);
 	const registerRuntimeSave = useCallback((saveRuntime: (() => Promise<boolean>) | null) => { runtimeSaveRef.current = saveRuntime; }, []);
 	const reportRuntimeBusy = useCallback((busy: boolean) => setRuntimeBusy(busy), []);
 
@@ -427,6 +430,7 @@ export function SettingsDrawer({ config, open, onClose, onSaved }: Props) {
 		setMessage('');
 		try {
 			const runtimeSaved = await runtimeSaveRef.current?.() || false;
+			await automaticSaveRef.current?.();
 			await persistSettings();
 			setState('saved');
 			setMessage(runtimeSaved ? '系统设置与统一 AI 运行时已保存' : '设置已同步到本机 Hermes');
@@ -491,6 +495,7 @@ export function SettingsDrawer({ config, open, onClose, onSaved }: Props) {
 
 						<LinkageDefaultSettings config={config} open={open} />
 						<ChatRuntimeSettingsPanel config={config} open={open} onRegisterSave={registerRuntimeSave} onBusyChange={reportRuntimeBusy} />
+						<AutomaticResearchSettingsPanel config={config} open={open} onRegisterSave={registerAutomaticSave} onBusyChange={reportRuntimeBusy} />
 						<HermesAgentSettingsPanel config={config} open={open} />
 
 						<section className="settings-section">

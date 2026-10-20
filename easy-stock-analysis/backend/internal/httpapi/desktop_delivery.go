@@ -162,7 +162,7 @@ func (s *Server) desktopNext(w http.ResponseWriter, r *http.Request, node, works
 			if kind == "chat" {
 				response, err = desktopChatPeer(db, "chat_claim", node, workspace, "", "", "", nil)
 			} else {
-				response, err = claimDesktopStrategy(r.Context(), db, node, workspace)
+				response, err = s.claimAutomaticResearch(r.Context(), db, node, workspace)
 			}
 			if err != nil {
 				writeDesktopPeerError(w, err)
@@ -185,39 +185,6 @@ func (s *Server) desktopNext(w http.ResponseWriter, r *http.Request, node, works
 		case <-fallback.C:
 		}
 	}
-}
-
-func claimDesktopStrategy(ctx context.Context, db *sql.DB, node, workspace string) (map[string]any, error) {
-	now := time.Now()
-	var id, created, expires, hash, body, question string
-	err := db.QueryRowContext(ctx, "SELECT id,created_at,expires_at,evidence_hash,context,question FROM ai_jobs WHERE node_id=? AND workspace_id=? AND (status='queued' OR (status='running' AND CAST(lease_until AS INTEGER)<?)) ORDER BY created_at LIMIT 1", node, workspace, now.Unix()).Scan(&id, &created, &expires, &hash, &body, &question)
-	if errors.Is(err, sql.ErrNoRows) {
-		return map[string]any{"job": nil}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	expiry, err := time.Parse(time.RFC3339Nano, expires)
-	if err != nil || !expiry.After(now) {
-		_, err = db.ExecContext(ctx, "UPDATE ai_jobs SET status='expired' WHERE id=? AND status IN ('queued','running')", id)
-		return map[string]any{"job": nil}, err
-	}
-	token := chatID() + chatID()
-	if len(token) != 64 {
-		return nil, errors.New("lease random source unavailable")
-	}
-	updated, err := db.ExecContext(ctx, "UPDATE ai_jobs SET status='running',lease_token=?,lease_until=? WHERE id=? AND node_id=? AND workspace_id=? AND (status='queued' OR (status='running' AND CAST(lease_until AS INTEGER)<?))", token, now.Add(360*time.Second).Unix(), id, node, workspace, now.Unix())
-	if err != nil {
-		return nil, err
-	}
-	count, err := updated.RowsAffected()
-	if err != nil {
-		return nil, err
-	}
-	if count != 1 {
-		return map[string]any{"job": nil}, nil
-	}
-	return map[string]any{"job": map[string]any{"id": id, "created_at": created, "expires_at": expires, "evidence_hash": hash, "context": json.RawMessage(body), "question": question, "lease_token": token}}, nil
 }
 
 func streamDesktopSnapshots(w http.ResponseWriter, r *http.Request, wake <-chan struct{}, read func() (any, bool, error)) {

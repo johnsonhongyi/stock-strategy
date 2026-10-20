@@ -47,22 +47,7 @@ func (s *Server) linkageTargets(w http.ResponseWriter, r *http.Request) {
 		response["chat_target"] = map[string]string{
 			"provider": chat.Provider, "node_id": chat.Node, "workspace_id": chat.Workspace,
 		}
-		if stateDB, stateErr := followDB(s.autoFollowDBPath); stateErr == nil {
-			defer stateDB.Close()
-			var body string
-			if stateDB.QueryRowContext(r.Context(), "SELECT body FROM state WHERE id=1").Scan(&body) == nil {
-				var state map[string]any
-				if json.Unmarshal([]byte(body), &state) == nil {
-					if settings, ok := state["ai_settings"].(map[string]any); ok {
-						nodeID, _ := settings["node_id"].(string)
-						workspaceID, _ := settings["workspace_id"].(string)
-						if nodeID != "" && workspaceID != "" {
-							response["strategy_target"] = map[string]string{"node_id": nodeID, "workspace_id": workspaceID}
-						}
-					}
-				}
-			}
-		}
+		response["strategy_target"] = map[string]string{"node_id": chat.Node, "workspace_id": chat.Workspace}
 		for _, target := range targets {
 			target["online"] = "false"
 			target["desktop_status"] = "no_heartbeat"

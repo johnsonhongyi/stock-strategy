@@ -66,7 +66,7 @@ func TestDesktopChatQueueAndCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	exec("INSERT INTO ai_desktop VALUES(?,?,?,?,?)", "desk", "ws", time.Now().UTC().Format(time.RFC3339Nano), "ready", `{"capabilities":["ai_chat_v1"],"models":[{"id":"gpt-6-luna","name":"Luna","efforts":["low"]}]}`)
+	exec("INSERT OR REPLACE INTO ai_desktop VALUES(?,?,?,?,?)", "desk", "ws", time.Now().UTC().Format(time.RFC3339Nano), "ready", `{"capabilities":["ai_chat_v1"],"models":[{"id":"gpt-6-luna","name":"Luna","efforts":["low"]}]}`)
 	runtime := func(body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		s.desktopChatRuntime(w, httptest.NewRequest("PUT", "/api/v1/ai/runtime", strings.NewReader(body)))

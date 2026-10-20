@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -112,39 +111,12 @@ func (s *Server) autoFollowAIPeer(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, map[string]any{"status": "stored"})
 	case "claim":
-		var id, created, expires, hash, context, question string
-		err = db.QueryRowContext(r.Context(), "SELECT id,created_at,expires_at,evidence_hash,context,question FROM ai_jobs WHERE node_id=? AND workspace_id=? AND (status='queued' OR (status='running' AND CAST(lease_until AS INTEGER)<?)) ORDER BY created_at LIMIT 1", input.NodeID, input.WorkspaceID, now.Unix()).Scan(&id, &created, &expires, &hash, &context, &question)
-		if err == sql.ErrNoRows {
-			writeJSON(w, 200, map[string]any{"job": nil})
-			return
-		}
-		if err != nil {
-			writeError(w, 503, "AI queue unavailable")
-			return
-		}
-		expiry, e := time.Parse(time.RFC3339Nano, expires)
-		if e != nil || !expiry.After(now) {
-			_, _ = db.ExecContext(r.Context(), "UPDATE ai_jobs SET status='expired' WHERE id=? AND status IN ('queued','running')", id)
-			writeJSON(w, 200, map[string]any{"job": nil})
-			return
-		}
-		token := make([]byte, 32)
-		if _, err = rand.Read(token); err != nil {
-			writeError(w, 503, "lease unavailable")
-			return
-		}
-		lease := hex.EncodeToString(token)
-		updated, e := db.ExecContext(r.Context(), "UPDATE ai_jobs SET status='running',lease_token=?,lease_until=? WHERE id=? AND node_id=? AND workspace_id=? AND (status='queued' OR (status='running' AND CAST(lease_until AS INTEGER)<?))", lease, now.Add(360*time.Second).Unix(), id, input.NodeID, input.WorkspaceID, now.Unix())
+		response, e := s.claimAutomaticResearch(r.Context(), db, input.NodeID, input.WorkspaceID)
 		if e != nil {
-			writeError(w, 503, "lease unavailable")
+			writeDesktopPeerError(w, e)
 			return
 		}
-		n, _ := updated.RowsAffected()
-		if n != 1 {
-			writeJSON(w, 200, map[string]any{"job": nil})
-			return
-		}
-		writeJSON(w, 200, map[string]any{"job": map[string]any{"id": id, "created_at": created, "expires_at": expires, "evidence_hash": hash, "context": json.RawMessage(context), "question": question, "lease_token": lease}})
+		writeJSON(w, 200, response)
 	case "result":
 		if len(input.ID) != 32 || len(input.LeaseToken) != 64 || (input.Status != "completed" && input.Status != "failed") || len(input.Result) == 0 || !json.Valid(input.Result) {
 			writeError(w, 400, "invalid AI result")
@@ -163,6 +135,10 @@ func (s *Server) autoFollowAIPeer(w http.ResponseWriter, r *http.Request) {
 		hashed := sha256.Sum256(compact.Bytes())
 		resultHash := hex.EncodeToString(hashed[:])
 		if status == input.Status && previous.String == resultHash && token == input.LeaseToken {
+			if err = settleAutomaticResearch(db, input.ID, input.Result); err != nil {
+				writeError(w, 503, "usage settlement unavailable")
+				return
+			}
 			writeJSON(w, 200, map[string]any{"status": "stored", "replayed": true})
 			return
 		}
@@ -190,6 +166,10 @@ func (s *Server) autoFollowAIPeer(w http.ResponseWriter, r *http.Request) {
 		n, _ := updated.RowsAffected()
 		if n != 1 {
 			writeError(w, 409, "AI lease conflict")
+			return
+		}
+		if err = settleAutomaticResearch(db, input.ID, input.Result); err != nil {
+			writeError(w, 503, "usage settlement unavailable")
 			return
 		}
 		writeJSON(w, 200, map[string]any{"status": "stored"})

@@ -5,13 +5,18 @@ const response=(data:unknown)=>new Response(JSON.stringify({data}),{status:200,h
 const rawResponse=(data:unknown)=>new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});
 afterEach(()=>vi.unstubAllGlobals());
 describe('desktop bridge conversation adapter',()=>{
- it('discovers a fixed-tier AGV model and clears an obsolete manual effort before enqueueing',async()=>{
+ it('does not overwrite the system runtime from background alignment',async()=>{
+  const current={provider:'codex_desktop',node_id:'chosen',workspace_id:'ws',model:'luna',reasoning_effort:'low'};
+  const fetch=vi.fn().mockResolvedValue(response({config:current}));vi.stubGlobal('fetch',fetch);
+  await expect(saveChatRuntime(config,{...current,provider:'codex_desktop',node_id:'another'})).rejects.toThrow('禁止后台自动改写');
+  expect(fetch.mock.calls.every(call=>!call[1]?.method||call[1].method==='GET')).toBe(true);
+ });
+ it('does not silently lower an unavailable AGV effort or choose another node',async()=>{
   const fetch=vi.fn().mockImplementation((input:RequestInfo|URL)=>{
    if(String(input).includes('/api/v1/linkage/targets'))return rawResponse({targets:[{node_id:'agv-main',workspace_id:'ws-agv',label:'AGV'}]});
    return response({config:{provider:'codex_desktop',node_id:'codex-main',workspace_id:'ws-codex',model:'gpt-6-luna',reasoning_effort:'high'},online:true,models:[{id:'claude-sonnet-4-6',name:'Claude Sonnet 4.6 (Thinking)',efforts:['auto']}],message:''});
   });vi.stubGlobal('fetch',fetch);
-  expect(await prepareDesktopChatRuntime(config,{provider:'antigravity_desktop',node_id:'',workspace_id:'',model:'claude-sonnet-4-6',reasoning_effort:'high'}))
-   .toMatchObject({provider:'antigravity_desktop',model:'claude-sonnet-4-6',reasoning_effort:'auto'});
+  await expect(prepareDesktopChatRuntime(config,{provider:'antigravity_desktop',node_id:'agv-main',workspace_id:'ws-agv',model:'claude-sonnet-4-6',reasoning_effort:'high'})).rejects.toThrow('不会自动换桥');
  });
  it('queries the strategy capability without changing the saved chat runtime',async()=>{
   const fetch=vi.fn().mockResolvedValue(response({online:true,models:[]}));vi.stubGlobal('fetch',fetch);
@@ -36,7 +41,7 @@ describe('desktop bridge conversation adapter',()=>{
  });
  it('saves runtime choice without any API key field',async()=>{
   const fetch=vi.fn().mockResolvedValue(response({}));vi.stubGlobal('fetch',fetch);
-  await saveChatRuntime(config,{provider:'codex_desktop',node_id:'node',workspace_id:'workspace',model:'luna',reasoning_effort:'low'});
+  await saveChatRuntime(config,{provider:'codex_desktop',node_id:'node',workspace_id:'workspace',model:'luna',reasoning_effort:'low'},true);
   const body=JSON.parse(fetch.mock.calls[0][1].body);expect(body.provider).toBe('codex_desktop');expect(body).not.toHaveProperty('api_key');
  });
  it('keeps Antigravity selection on an online AGV target even when Codex is the default workspace',async()=>{
@@ -50,7 +55,7 @@ describe('desktop bridge conversation adapter',()=>{
    const model=antigravity?'gemini-3.8-flash':'gpt-6-luna';
    return response({config:{provider:'codex_desktop',node_id:'codex-main',workspace_id:'ws-codex',model:'gpt-6-luna',reasoning_effort:'low'},online:true,models:[{id:model,name:model,efforts:['low','high']}],message:''});
   });vi.stubGlobal('fetch',fetch);
-  const current={provider:'antigravity_desktop' as const,node_id:'',workspace_id:'',model:'gemini-3.8-flash',reasoning_effort:'high'};
+  const current={provider:'antigravity_desktop' as const,node_id:'agv-main',workspace_id:'ws-agv',model:'gemini-3.8-flash',reasoning_effort:'high'};
   const selected=await prepareDesktopChatRuntime(config,current,'antigravity_desktop');
   expect(selected).toMatchObject({provider:'antigravity_desktop',node_id:'agv-main',workspace_id:'ws-agv',model:'gemini-3.8-flash',reasoning_effort:'high'});
  });
@@ -59,7 +64,7 @@ describe('desktop bridge conversation adapter',()=>{
    if(String(input).includes('/api/v1/linkage/targets'))return rawResponse({default_node_id:'codex-main',targets:[{node_id:'codex-main',workspace_id:'ws-codex',label:'Codex'}]});
    return response({config:{provider:'codex_desktop',node_id:'codex-main',workspace_id:'ws-codex',model:'gpt-6-luna',reasoning_effort:'low'},online:true,models:[{id:'gpt-6-luna',name:'Codex',efforts:['low']}],message:''});
   });vi.stubGlobal('fetch',fetch);
-  await expect(prepareDesktopChatRuntime(config,{provider:'antigravity_desktop',node_id:'',workspace_id:'',model:'gemini-3.8-flash',reasoning_effort:'low'},'antigravity_desktop')).rejects.toThrow('Antigravity');
+  await expect(prepareDesktopChatRuntime(config,{provider:'antigravity_desktop',node_id:'',workspace_id:'',model:'gemini-3.8-flash',reasoning_effort:'low'},'antigravity_desktop')).rejects.toThrow('不会自动换桥');
  });
  it('checks for the Antigravity marker on an AGV bridge test',async()=>{
   const target:AvailableDesktopChatTarget={node_id:'agv-main',workspace_id:'ws-agv',label:'Antigravity',provider:'antigravity_desktop',runtime:{config:{provider:'antigravity_desktop',node_id:'agv-main',workspace_id:'ws-agv',model:'gemini-3.8-flash',reasoning_effort:'low'},online:true,models:[{id:'gemini-3.8-flash',name:'Gemini 3.8 Flash',efforts:['low']}],message:''}};

@@ -103,8 +103,8 @@ func TestDesktopResearchDeadlineLeavesCancellationTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exec("INSERT INTO desktop_chat_config VALUES(1,?)", `{"provider":"codex_desktop","node_id":"desk","workspace_id":"ws","model":"gpt-6-luna","reasoning_effort":"low"}`)
-	exec("INSERT INTO ai_desktop VALUES(?,?,?,?,?)", "desk", "ws", time.Now().UTC().Format(time.RFC3339Nano), "ready", `{"capabilities":["ai_chat_v1","stock_research_v1"],"models":[{"id":"gpt-6-luna","efforts":["low"]}]}`)
+	exec("INSERT OR REPLACE INTO desktop_chat_config VALUES(1,?)", `{"provider":"codex_desktop","node_id":"desk","workspace_id":"ws","model":"gpt-6-luna","reasoning_effort":"low"}`)
+	exec("INSERT OR REPLACE INTO ai_desktop VALUES(?,?,?,?,?)", "desk", "ws", time.Now().UTC().Format(time.RFC3339Nano), "ready", `{"capabilities":["ai_chat_v1","stock_research_v1"],"models":[{"id":"gpt-6-luna","efforts":["low"]}]}`)
 	p, err := s.newStockResearchCodexPrompter(stockanalysis.ResearchRequest{Symbol: "600519.SH", Model: "gpt-6-luna", ReasoningEffort: "low"})
 	if err != nil {
 		t.Fatal(err)

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestStrategyBridgeFailoverIsIdempotentAndPreservesPolicy(t *testing.T) {
+func TestStrategyBridgeNeverSilentlyChangesRoutingOrTradingPolicy(t *testing.T) {
 	server, _, exec := aiPeerFixture(t)
 	account, err := followDB(server.autoFollowDBPath)
 	if err != nil {
@@ -25,7 +25,6 @@ func TestStrategyBridgeFailoverIsIdempotentAndPreservesPolicy(t *testing.T) {
 	if _, err = account.Exec("UPDATE state SET body=? WHERE id=1", string(body)); err != nil {
 		t.Fatal(err)
 	}
-	exec("INSERT INTO ai_desktop VALUES(?,?,?,?,?)", "desk", "ws", time.Now().UTC().Format(time.RFC3339Nano), "ready", `{"capabilities":["strategy_research"],"models":[{"id":"gpt-6-luna","efforts":["low","max"]}]}`)
 	db, err := server.desktopDB()
 	if err != nil {
 		t.Fatal(err)
@@ -36,16 +35,16 @@ func TestStrategyBridgeFailoverIsIdempotentAndPreservesPolicy(t *testing.T) {
 		}
 	}
 	var count int
-	var payload string
-	if err = db.QueryRow("SELECT count(*),max(payload) FROM commands WHERE action='ai_settings'").Scan(&count, &payload); err != nil {
+	if err = db.QueryRow("SELECT count(*) FROM commands WHERE action='ai_settings'").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	var next map[string]any
-	_ = json.Unmarshal([]byte(payload), &next)
-	if count != 1 || next["node_id"] != "desk" || next["workspace_id"] != "ws" || next["model"] != "gpt-6-luna" || next["reasoning_effort"] != "max" || next["mode"] != "enforce" || next["enabled"] != true || next["interval_seconds"] != nil {
-		t.Fatalf("count=%d settings=%s", count, payload)
+	if count != 0 {
+		t.Fatalf("unexpected automatic settings changes: %d", count)
 	}
-	state["ai_settings"] = next
+	var after string
+	if err = account.QueryRow("SELECT body FROM state WHERE id=1").Scan(&after); err != nil || after != string(body) {
+		t.Fatal("account or risk policy changed")
+	}
 	state["ai"] = map[string]any{"desktop_online": false, "desktop_status": "ready", "jobs": []any{"retained"}}
 	overlayStrategyBridgeState(context.Background(), db, state)
 	ai := state["ai"].(map[string]any)

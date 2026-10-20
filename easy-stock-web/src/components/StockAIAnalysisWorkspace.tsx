@@ -180,7 +180,7 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, initialAnal
 		if (!config) return false;
 		setAIChoiceBusy(true);
 		try {
-			const saved = await saveChatRuntime(config, next);
+			const saved = await saveChatRuntime(config, next, true);
 			setSystemRuntime(saved.config);
 			setAnalysisProvider(saved.config.provider);
 			setCodexModel(saved.config.model);

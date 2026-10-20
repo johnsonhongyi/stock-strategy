@@ -344,7 +344,7 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
     next = await prepareDesktopChatRuntime(config,next,provider);
    }
    const moved=isDesktopChatProvider(next.provider)&&(next.node_id!==desktopRuntime.config.node_id||next.workspace_id!==desktopRuntime.config.workspace_id);
-   await saveChatRuntime(config,next); await loadModel();
+   await saveChatRuntime(config,next, true); await loadModel();
    setModelSwitchState('saved'); setModelSwitchMessage(moved?'已自动选择活跃桥 '+shortBridgeIdentity(next.node_id,next.workspace_id)+'，下一条消息生效。':'已保存，刷新后自动恢复；下一条消息生效。');
   } catch (error) { setModelSwitchState('error'); setModelSwitchMessage(error instanceof Error ? error.message : '对话配置保存失败'); }
  };

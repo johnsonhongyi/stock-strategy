@@ -85,7 +85,7 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 		if (!config) return;
 		setRuntimeLoading(true);
 		try {
-			const saved = await saveChatRuntime(config, next);
+			const saved = await saveChatRuntime(config, next, true);
 			setRuntimePreference(saved.config);
 			window.dispatchEvent(new Event('ai-runtime-changed'));
 		} catch (cause) {

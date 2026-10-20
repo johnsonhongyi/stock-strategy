@@ -24,9 +24,9 @@ describe('worker receipt and model failure feedback',()=>{
   expect(commandNotice({...receipt,action:'ai_ask'},job)).toContain('分析失败：TimeoutError');
   expect(commandNotice({...receipt,action:'ai_ask'},{...job,status:'completed'})).toContain('分析完成');
  });
- it('shows model and effort controls and runtime binding',()=>{
+ it('shows the shared automatic research settings instead of independent model controls',()=>{
   const html=renderToString(<FollowAIWorkspace data={null} config={null} onChanged={()=>{}}/>);
-  expect(html).toContain('AI分析模型');expect(html).toContain('AI推理强度');expect(html).toContain('最近实际生效');expect(html).toContain('数据目录');
+  expect(html).toContain('自动 AI 投研');expect(html).toContain('统一 AI 运行时');expect(html).toContain('默认关闭');expect(html).not.toContain('AI分析模型');expect(html).not.toContain('AI推理强度');
  });
 });
 

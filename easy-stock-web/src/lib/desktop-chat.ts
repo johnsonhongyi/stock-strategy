@@ -41,21 +41,13 @@ export async function loadAvailableDesktopChatTargets(config:BackendConfig,capab
 }
 export async function prepareDesktopChatRuntime(config: BackendConfig, current: ChatRuntimeConfig, provider:DesktopChatProvider=current.provider==='antigravity_desktop'?'antigravity_desktop':'codex_desktop'): Promise<ChatRuntimeConfig> {
  const available=await loadAvailableDesktopChatTargets(config);
- const candidates=targetsForDesktopProvider(available.targets,provider).sort((a,b)=>
-  Number(b.node_id===current.node_id&&b.workspace_id===current.workspace_id)-Number(a.node_id===current.node_id&&a.workspace_id===current.workspace_id)
-  || Number(b.workspace_id===available.preferredWorkspaceID)-Number(a.workspace_id===available.preferredWorkspaceID));
- const target=candidates[0];
- if(target){
-  const model=target.runtime.models.find(model=>model.id===current.model)||target.runtime.models[0];
-  return {...current,provider,node_id:target.node_id,workspace_id:target.workspace_id,model:model.id,reasoning_effort:model.efforts.includes(current.reasoning_effort)?current.reasoning_effort:model.efforts[0]};
- }
- const engine=desktopChatProviderLabel(provider).replace(/^桌面\s*/, '');
- if(available.preferredWorkspaceID){
-  throw new Error('默认 ATS 工作区 '+available.preferredWorkspaceID+' 没有在线且有可用模型的 '+engine+' 桥。');
- }
- throw new Error('没有支持 AI 对话的在线 '+engine+' 桌面桥，请检查桥进程与模型目录。');
+ const target=targetsForDesktopProvider(available.targets,provider).find(t=>t.node_id===current.node_id&&t.workspace_id===current.workspace_id);
+ if(!target||!target.runtime.online||!target.runtime.models.some(m=>m.id===current.model&&m.efforts.includes(current.reasoning_effort)))throw new Error('系统所选桥、模型或推理强度不可用，请手动修改设置；不会自动换桥或降档。');
+ return {...current,provider};
 }
-export async function saveChatRuntime(config:BackendConfig,value:ChatRuntimeConfig){
+export async function saveChatRuntime(config:BackendConfig,value:ChatRuntimeConfig,userInitiated=false){
+ if(!userInitiated){const current=(await loadChatRuntime(config)).config;if(['provider','node_id','workspace_id','model','reasoning_effort'].some(key=>current[key as keyof ChatRuntimeConfig]!==value[key as keyof ChatRuntimeConfig]))throw new Error('禁止后台自动改写系统桥或模型，请在系统设置中手动选择并保存。');}
+
  return (await requestChatJSON<{data:ChatRuntime}>(config,'/api/v1/ai/runtime',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)})).data;
 }
 type ChatJob={id:string;session_id:string;status:string;stream_events?:boolean;result?:{content?:string;thread_id?:string;error_code?:string;model?:string;reasoning_effort?:string;stage?:string;elapsed_seconds?:number}};

@@ -77,6 +77,13 @@ func aiPeerFixture(t *testing.T) (*Server, func(string, map[string]any) *httptes
 		s.autoFollowAIPeer(response, request)
 		return response
 	}
+	if _, err := s.desktopDB(); err != nil {
+		t.Fatal(err)
+	}
+	exec(`INSERT INTO automatic_research_policy VALUES(1,'{"enabled":true,"interval_seconds":900,"daily_max_runs":3,"daily_token_budget":300000,"revision":0}')`)
+	exec(`INSERT INTO desktop_chat_config VALUES(1,'{"provider":"codex_desktop","node_id":"desk","workspace_id":"ws","model":"gpt-6-luna","reasoning_effort":"low"}')`)
+	exec(`INSERT INTO ai_desktop VALUES(?,?,?,?,?)`, "desk", "ws", time.Now().UTC().Format(time.RFC3339Nano), "ready", `{"capabilities":["strategy_research"],"models":[{"id":"gpt-6-luna","efforts":["low"]}]}`)
+	exec(`UPDATE ai_jobs SET context='{"stocks":[],"ai_runtime":{"model":"gpt-6-luna","reasoning_effort":"low"},"auto_research_revision":0}'`)
 	return s, call, exec
 }
 
@@ -99,7 +106,7 @@ func claimedToken(t *testing.T, r *httptest.ResponseRecorder) string {
 	return result.Job.Lease
 }
 
-func TestAutoFollowAIPeerLeaseRecoveryAndIdempotence(t *testing.T) {
+func TestAutoFollowAIPeerExpiredAttemptDoesNotRetryAndResultIsIdempotent(t *testing.T) {
 	_, call, exec := aiPeerFixture(t)
 	old := claimedToken(t, call("claim", nil))
 	if len(old) != 64 {
@@ -111,14 +118,11 @@ func TestAutoFollowAIPeerLeaseRecoveryAndIdempotence(t *testing.T) {
 	if r := call("result", payload); r.Code != 409 {
 		t.Fatal("expired lease accepted", r.Code)
 	}
-	fresh := claimedToken(t, call("claim", nil))
-	if fresh == old || len(fresh) != 64 {
-		t.Fatal("lease not renewed")
+	if fresh := claimedToken(t, call("claim", nil)); fresh != "" {
+		t.Fatal("expired attempt silently retried")
 	}
-	if r := call("result", payload); r.Code != 409 {
-		t.Fatal("old owner accepted", r.Code)
-	}
-	payload["lease_token"] = fresh
+	// The original owner can deliver only while its existing lease is active.
+	exec("UPDATE ai_jobs SET lease_until=?", time.Now().Add(time.Minute).Unix())
 	for i := 0; i < 2; i++ {
 		if r := call("result", payload); r.Code != 200 {
 			t.Fatal("result replay", r.Code, r.Body.String())
