@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -154,7 +155,30 @@ func (s *Server) automaticResearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "用量暂不可读，自动任务暂停")
 		return
 	}
-	rows, err := db.Query(`SELECT j.id,j.created_at,j.status,j.context,j.result,r.started_at,r.total_tokens,r.usage_known FROM ai_jobs j LEFT JOIN automatic_research_runs r ON j.id=r.job_id ORDER BY j.created_at DESC LIMIT 30`)
+	const pageSize = 20
+	page := 1
+	if rawPage := r.URL.Query().Get("page"); rawPage != "" {
+		parsedPage, parseErr := strconv.Atoi(rawPage)
+		if parseErr != nil || parsedPage < 1 {
+			writeError(w, http.StatusBadRequest, "无效的运行记录页码")
+			return
+		}
+		page = parsedPage
+	}
+	var recordTotal int
+	if err := db.QueryRow("SELECT count(*) FROM ai_jobs").Scan(&recordTotal); err != nil {
+		writeError(w, 503, "运行记录不可读")
+		return
+	}
+	pageCount := (recordTotal + pageSize - 1) / pageSize
+	if pageCount == 0 {
+		pageCount = 1
+	}
+	if page > pageCount {
+		page = pageCount
+	}
+	offset := (page - 1) * pageSize
+	rows, err := db.Query(`SELECT j.id,j.created_at,j.status,j.context,j.result,r.started_at,r.total_tokens,r.usage_known FROM ai_jobs j LEFT JOIN automatic_research_runs r ON j.id=r.job_id ORDER BY j.created_at DESC,j.id DESC LIMIT ? OFFSET ?`, pageSize, offset)
 	if err != nil {
 		writeError(w, 503, "运行记录不可用")
 		return
@@ -184,7 +208,7 @@ func (s *Server) automaticResearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "运行记录不可用")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"data": map[string]any{"policy": p, "runtime": c, "status": status, "usage": u, "records": records}})
+	writeJSON(w, 200, map[string]any{"data": map[string]any{"policy": p, "runtime": c, "status": status, "usage": u, "records": records, "records_total": recordTotal, "records_page": page, "records_page_size": pageSize}})
 }
 
 // Admission is serialized by a SQLite write lock across API processes. Old or

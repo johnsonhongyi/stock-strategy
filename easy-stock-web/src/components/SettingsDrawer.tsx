@@ -486,7 +486,7 @@ export function SettingsDrawer({ config, open, onClose, onSaved }: Props) {
 
 				{state === 'loading' && <div className="settings-loading"><LoaderCircle className="spin" size={22} /><span>读取本机设置</span></div>}
 				{state !== 'loading' && (
-					<form className="settings-form" onSubmit={save}>
+					<form className="settings-form settings-form-compact" onSubmit={save}>
 						<section className="settings-security-note">
 							<ShieldCheck size={19} />
 							<div><strong>模型密钥由 Hermes 管理</strong><span>API Key 只写入 Hermes 的本机 .env；页面仅读取是否已配置，不会取回密钥原文。</span></div>

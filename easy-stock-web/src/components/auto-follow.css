@@ -3,3 +3,15 @@
 .follow-research{display:grid;gap:16px}.follow-plan{border-top:1px solid var(--line);padding:12px 0}.follow-plan summary{cursor:pointer;display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px}.follow-plan summary span{font-size:var(--ui-font-12, 12px);color:var(--text-secondary)}.follow-plan-body{padding:12px 0}.follow-plan-body dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.follow-plan-body dl>div{padding:8px;border:1px solid var(--line);border-radius:8px}.follow-plan-body dd{margin:4px 0;overflow-wrap:anywhere}.follow-plan-body li{margin:6px 0}.follow-plan-body small{overflow-wrap:anywhere}
 
 .follow-allocation{display:grid;grid-template-columns:minmax(180px,1fr) 1fr;gap:12px;margin:12px 0}.follow-allocation progress{width:100%;accent-color:var(--accent)}
+
+.automatic-research-summary { display: grid; gap: 6px; min-width: 0; padding: 12px 15px; border: 1px solid var(--theme-line, #cfe0f2); border-radius: 10px; background: linear-gradient(110deg, var(--theme-blue-soft, #edf5ff), var(--theme-surface, #fff)); }
+.automatic-research-summary-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.automatic-research-summary-heading > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.automatic-research-summary-heading > div > strong { font-size: var(--ui-font-14, 14px); }
+.automatic-research-summary-heading > button { flex: 0 0 auto; min-height: 28px; padding: 0 9px; border: 1px solid var(--theme-blue-line, #b9cce5); border-radius: 7px; background: var(--theme-surface, #fff); color: var(--theme-blue, #175ea9); font-size: var(--ui-font-11, 11px); font-weight: 650; cursor: pointer; }
+.automatic-research-summary-heading > button:hover { background: var(--theme-blue-soft, #eaf4ff); }
+.automatic-research-summary-meta { display: flex; align-items: center; justify-content: space-between; gap: 4px 14px; flex-wrap: wrap; min-width: 0; color: var(--text-secondary, #52657a); font-size: var(--ui-font-11, 11px); }
+.automatic-research-summary-meta > span { min-width: 0; overflow-wrap: anywhere; }
+.automatic-research-summary > p,
+.automatic-research-summary > small { margin: 0; color: var(--muted, #69798b); font-size: var(--ui-font-10, 10px); line-height: 1.4; }
+@media(max-width:650px) { .automatic-research-summary { padding: 10px 11px; } .automatic-research-summary-meta { display: grid; gap: 3px; } }
