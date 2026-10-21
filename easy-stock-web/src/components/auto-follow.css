@@ -8,8 +8,14 @@
 .automatic-research-summary-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
 .automatic-research-summary-heading > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .automatic-research-summary-heading > div > strong { font-size: var(--ui-font-14, 14px); }
-.automatic-research-summary-heading > button { flex: 0 0 auto; min-height: 28px; padding: 0 9px; border: 1px solid var(--theme-blue-line, #b9cce5); border-radius: 7px; background: var(--theme-surface, #fff); color: var(--theme-blue, #175ea9); font-size: var(--ui-font-11, 11px); font-weight: 650; cursor: pointer; }
-.automatic-research-summary-heading > button:hover { background: var(--theme-blue-soft, #eaf4ff); }
+.automatic-research-summary-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.automatic-research-summary-actions > button, .automatic-research-summary-heading > button { flex: 0 0 auto; min-height: 28px; padding: 0 9px; border: 1px solid var(--theme-blue-line, #b9cce5); border-radius: 7px; background: var(--theme-surface, #fff); color: var(--theme-blue, #175ea9); font-size: var(--ui-font-11, 11px); font-weight: 650; cursor: pointer; }
+.automatic-research-summary-actions > button:hover, .automatic-research-summary-heading > button:hover { background: var(--theme-blue-soft, #eaf4ff); }
+.automatic-research-summary-actions > .automatic-research-settle-btn { border-color: #d97706; background: #fffbeb; color: #b45309; font-weight: 700; }
+.automatic-research-summary-actions > .automatic-research-settle-btn:hover { background: #fef3c7; border-color: #b45309; }
+.automatic-research-summary-actions > .automatic-research-settle-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+html[data-theme="dark"] .automatic-research-summary-actions > .automatic-research-settle-btn { background: rgba(245, 158, 11, 0.16); border-color: #d97706; color: #fbbf24; }
+html[data-theme="dark"] .automatic-research-summary-actions > .automatic-research-settle-btn:hover { background: rgba(245, 158, 11, 0.28); }
 .automatic-research-summary-meta { display: flex; align-items: center; justify-content: space-between; gap: 4px 14px; flex-wrap: wrap; min-width: 0; color: var(--text-secondary, #52657a); font-size: var(--ui-font-11, 11px); }
 .automatic-research-summary-meta > span { min-width: 0; overflow-wrap: anywhere; }
 .automatic-research-summary > p,

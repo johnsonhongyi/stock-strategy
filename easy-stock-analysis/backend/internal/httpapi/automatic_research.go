@@ -50,7 +50,34 @@ type automaticResearchUsage struct {
 	Unknown int   `json:"unsettled_runs"`
 }
 
+type dbExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func autoReconcileResearchRuns(e dbExecer) error {
+	now := time.Now()
+	nowUnix := now.Unix()
+	nowISO := now.UTC().Format(time.RFC3339Nano)
+	_, _ = e.Exec(`
+		UPDATE ai_jobs 
+		SET status='expired' 
+		WHERE status IN ('queued', 'running') 
+		  AND (
+		    expires_at <= ? 
+		    OR (status='running' AND CAST(COALESCE(lease_until, '0') AS INTEGER) < ? AND CAST(COALESCE(lease_until, '0') AS INTEGER) > 0)
+		  )
+	`, nowISO, nowUnix)
+	_, err := e.Exec(`
+		UPDATE automatic_research_runs 
+		SET usage_known=1, total_tokens=COALESCE(total_tokens, 0) 
+		WHERE usage_known=0 
+		  AND job_id IN (SELECT id FROM ai_jobs WHERE status IN ('expired', 'failed', 'cancelled', 'completed'))
+	`)
+	return err
+}
+
 func automaticResearchDaily(db *sql.DB) (automaticResearchUsage, error) {
+	_ = autoReconcileResearchRuns(db)
 	var u automaticResearchUsage
 	err := db.QueryRow("SELECT count(*),COALESCE(sum(total_tokens),0),COALESCE(sum(CASE WHEN usage_known=0 THEN 1 ELSE 0 END),0) FROM automatic_research_runs WHERE day=?", automaticResearchDay()).Scan(&u.Runs, &u.Tokens, &u.Unknown)
 	return u, err
@@ -150,6 +177,14 @@ func (s *Server) automaticResearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if r.Method == http.MethodPost {
+		s.settleAutomaticResearchManual(w, r)
+		return
+	}
+	s.renderAutomaticResearch(w, r, db, p)
+}
+
+func (s *Server) renderAutomaticResearch(w http.ResponseWriter, r *http.Request, db *sql.DB, p automaticResearchPolicy) {
 	c, u, status, err := s.automaticResearchState(db, p)
 	if err != nil {
 		writeError(w, 503, "用量暂不可读，自动任务暂停")
@@ -209,6 +244,40 @@ func (s *Server) automaticResearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"data": map[string]any{"policy": p, "runtime": c, "status": status, "usage": u, "records": records, "records_total": recordTotal, "records_page": page, "records_page_size": pageSize}})
+}
+
+func (s *Server) settleAutomaticResearchManual(w http.ResponseWriter, r *http.Request) {
+	if !s.followCanControl(r) || (r.Header.Get("Origin") != "" && !webSameOrigin(r)) {
+		writeError(w, 403, "需要管理员及同源访问")
+		return
+	}
+	db, err := s.desktopDB()
+	if err != nil {
+		writeError(w, 503, "自动投研数据库不可用")
+		return
+	}
+	p, err := loadAutomaticResearchPolicy(db)
+	if err != nil {
+		writeError(w, 503, "自动投研设置不可用")
+		return
+	}
+	now := time.Now()
+	nowUnix := now.Unix()
+	nowISO := now.UTC().Format(time.RFC3339Nano)
+	_, _ = db.Exec(`
+		UPDATE ai_jobs 
+		SET status='expired' 
+		WHERE status IN ('queued', 'running') 
+		  AND (
+		    expires_at <= ? 
+		    OR (status='running' AND CAST(COALESCE(lease_until, '0') AS INTEGER) < ? AND CAST(COALESCE(lease_until, '0') AS INTEGER) > 0)
+		  )
+	`, nowISO, nowUnix)
+	if _, err = db.Exec("UPDATE automatic_research_runs SET usage_known=1, total_tokens=COALESCE(total_tokens, 0) WHERE usage_known=0"); err != nil {
+		writeError(w, 503, "结算未确认用量失败")
+		return
+	}
+	s.renderAutomaticResearch(w, r, db, p)
 }
 
 // Admission is serialized by a SQLite write lock across API processes. Old or
@@ -271,6 +340,7 @@ func (s *Server) claimAutomaticResearch(ctx context.Context, db *sql.DB, node, w
 	if e != nil || time.Since(stamp) < 0 || time.Since(stamp) > 90*time.Second || (status != "ready" && status != "analyzing") || !capable || !validDesktopSelection(c, catalog.Models) {
 		return empty, nil
 	}
+	_ = autoReconcileResearchRuns(tx)
 	var used int64
 	var runs, unknown int
 	if err = tx.QueryRow("SELECT count(*),COALESCE(sum(total_tokens),0),COALESCE(sum(CASE WHEN usage_known=0 THEN 1 ELSE 0 END),0) FROM automatic_research_runs WHERE day=?", automaticResearchDay()).Scan(&runs, &used, &unknown); err != nil {
@@ -327,16 +397,16 @@ func settleAutomaticResearch(db *sql.DB, id string, result json.RawMessage) erro
 	var envelope struct {
 		Usage map[string]int64 `json:"token_usage"`
 	}
-	if json.Unmarshal(result, &envelope) != nil {
-		return nil
-	}
-	usage := envelope.Usage
-	total, known := usage["totalTokens"]
-	if !known {
-		total, known = usage["total"]
+	total := int64(0)
+	known := false
+	if json.Unmarshal(result, &envelope) == nil && envelope.Usage != nil {
+		total, known = envelope.Usage["totalTokens"]
+		if !known {
+			total, known = envelope.Usage["total"]
+		}
 	}
 	if !known || total < 0 {
-		return nil
+		total = 0
 	}
 	_, err := db.Exec("UPDATE automatic_research_runs SET total_tokens=?,usage_known=1 WHERE job_id=?", total, id)
 	return err

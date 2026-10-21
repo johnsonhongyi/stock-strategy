@@ -84,6 +84,23 @@ export function AutomaticResearchSettingsPanel({ config, open, view = 'settings'
   }, [config, open, loadPage, recordPage]);
 
   const refresh = useCallback(() => loadPage(recordPage).catch(error => setNotice(String(error))), [loadPage, recordPage]);
+  const settle = useCallback(async () => {
+    if (!config) return;
+    setBusy(true);
+    setNotice('');
+    try {
+      const { data } = await requestJSON<{ data: Snapshot }>(config, `/api/v1/ai/auto-research/settle?page=${recordPage}`, { method: 'POST' });
+      setSnapshot(data);
+      setRecordPage(data.records_page);
+      setDraft(data.policy);
+      dirty.current = false;
+      setNotice('已处理结算未确认用量，自动投研后台工作流程已恢复。');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '处理结算失败');
+    } finally {
+      setBusy(false);
+    }
+  }, [config, recordPage]);
   const save = useCallback(async () => {
     const current = draftRef.current;
     if (!config || !current || !dirty.current) return false;
@@ -118,11 +135,25 @@ export function AutomaticResearchSettingsPanel({ config, open, view = 'settings'
   if (view === 'summary') {
     const status = snapshot ? compactLabels[snapshot.status] || snapshot.status : '正在读取状态';
     const statusKind = !snapshot ? 'loading' : !snapshot.policy.enabled ? 'off' : snapshot.status === 'ready' ? 'ready' : 'paused';
+    const hasUnsettled = !!snapshot && (snapshot.status === 'usage_unsettled' || snapshot.usage.unsettled_runs > 0);
     return (
       <section className="automatic-research-summary" aria-label="自动 AI 投研状态">
         <div className="automatic-research-summary-heading">
           <div><strong>自动 AI 投研</strong><span className={`automatic-research-badge ${statusKind}`}>{status}</span></div>
-          {onOpenSettings && <button type="button" onClick={onOpenSettings}>系统设置</button>}
+          <div className="automatic-research-summary-actions">
+            {hasUnsettled && (
+              <button
+                type="button"
+                className="automatic-research-settle-btn"
+                disabled={busy}
+                onClick={() => void settle()}
+                title="清除未确认/超时的用量锁定，恢复后台自动投研工作流"
+              >
+                {busy ? '正在结算...' : '结算并恢复'}
+              </button>
+            )}
+            {onOpenSettings && <button type="button" onClick={onOpenSettings}>系统设置</button>}
+          </div>
         </div>
         <div className="automatic-research-summary-meta">
           <span title={snapshot ? runtimeLabel(snapshot.runtime) : undefined}>{snapshot ? `系统模型 · ${runtimeLabel(snapshot.runtime)}` : '系统模型读取中'}</span>
@@ -155,7 +186,7 @@ export function AutomaticResearchSettingsPanel({ config, open, view = 'settings'
           <label>每日最多调用次数<input type="number" aria-label="自动投研每日次数" min={1} max={100} value={draft.daily_max_runs} disabled={busy} onChange={event => change('daily_max_runs', Number(event.target.value))} /></label>
           <label>每日 Token 预算<input type="number" aria-label="自动投研每日 Token 预算" min={1000} max={10000000} step={1000} value={draft.daily_token_budget} disabled={busy} onChange={event => change('daily_token_budget', Number(event.target.value))} /></label>
         </div>
-        <div className="automatic-research-save-row"><small>失败尝试计入次数；用量未知或未结算时会暂停后续任务，不自动重试。</small><button className="automatic-research-save" type="button" disabled={busy} onClick={() => void save().catch(() => undefined)}>保存</button></div>
+        <div className="automatic-research-save-row"><small>失败尝试计入次数；任务异常中断或超时时支持自动对账结算，亦可随时一键手动结算恢复。</small><button className="automatic-research-save" type="button" disabled={busy} onClick={() => void save().catch(() => undefined)}>保存</button></div>
       </>}
       {snapshot && <details className="automatic-research-history">
         <summary><strong>历史用量与运行记录</strong><span>{usageSummary}</span></summary>
@@ -163,9 +194,25 @@ export function AutomaticResearchSettingsPanel({ config, open, view = 'settings'
           <div className="automatic-research-usage">
             <div><span>今日调用</span><strong>{snapshot.usage.runs} / {snapshot.policy.daily_max_runs}</strong></div>
             <div><span>已报告 Token</span><strong>{snapshot.usage.total_tokens.toLocaleString()} / {snapshot.policy.daily_token_budget.toLocaleString()}</strong></div>
-            <div><span>未结算</span><strong>{snapshot.usage.unsettled_runs}</strong></div>
+            <div className={snapshot.usage.unsettled_runs > 0 ? 'automatic-research-usage-warn' : ''}><span>未结算</span><strong>{snapshot.usage.unsettled_runs}</strong></div>
           </div>
-          <div className="automatic-research-records-heading"><h4>最近运行记录 <small>{recordTotal} 条</small></h4><button type="button" disabled={busy} onClick={() => void refresh()}>刷新</button></div>
+          <div className="automatic-research-records-heading">
+            <h4>最近运行记录 <small>{recordTotal} 条</small></h4>
+            <div className="automatic-research-records-actions">
+              {snapshot.usage.unsettled_runs > 0 && (
+                <button
+                  type="button"
+                  className="automatic-research-settle-btn-small"
+                  disabled={busy}
+                  onClick={() => void settle()}
+                  title="处理未结算任务并恢复调度"
+                >
+                  {busy ? '结算中...' : '一键处理结算并恢复'}
+                </button>
+              )}
+              <button type="button" disabled={busy} onClick={() => void refresh()}>刷新</button>
+            </div>
+          </div>
           <div className="automatic-research-record-list" aria-label="自动投研最近运行记录">
             {snapshot.records.length ? snapshot.records.map(record => (
               <article className="automatic-research-record" key={record.id}>

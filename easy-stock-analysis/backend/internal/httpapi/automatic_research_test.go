@@ -123,6 +123,38 @@ func TestAutomaticResearchSettingsPreserveAccountAndRejectCrossOrigin(t *testing
 	}
 }
 
+func TestAutomaticResearchAutoReconciliationAndManualSettle(t *testing.T) {
+	s, call, exec := aiPeerFixture(t)
+	db := mustAutomaticDB(t, s)
+	// Claim one job so it enters automatic_research_runs with usage_known=0
+	token := claimedToken(t, call("claim", nil))
+	if len(token) != 64 {
+		t.Fatal("claim failed")
+	}
+	// Verify state is usage_unsettled while running
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v1/ai/auto-research", nil)
+	s.automaticResearch(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"status":"usage_unsettled"`) {
+		t.Fatalf("expected usage_unsettled, got code %d body %s", w.Code, w.Body.String())
+	}
+	// Case 1: Manual settle endpoint POST /api/v1/ai/auto-research/settle
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest("POST", "/api/v1/ai/auto-research/settle", nil)
+	r.RemoteAddr = "127.0.0.1:1234"
+	s.settleAutomaticResearchManual(w, r)
+	if w.Code != 200 || strings.Contains(w.Body.String(), `"status":"usage_unsettled"`) || !strings.Contains(w.Body.String(), `"unsettled_runs":0`) {
+		t.Fatalf("manual settle failed: code %d body %s", w.Code, w.Body.String())
+	}
+	// Case 2: Auto-reconciliation of terminal jobs (e.g. expired or failed jobs)
+	exec("UPDATE automatic_research_runs SET usage_known=0")
+	exec("UPDATE ai_jobs SET status='expired'")
+	u, e := automaticResearchDaily(db)
+	if e != nil || u.Unknown != 0 {
+		t.Fatalf("auto-reconcile of expired job failed: %v, unknown: %d", e, u.Unknown)
+	}
+}
+
 func mustAutomaticDB(t *testing.T, s *Server) *sql.DB {
 	t.Helper()
 	db, e := s.desktopDB()
