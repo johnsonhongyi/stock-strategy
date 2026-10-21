@@ -73,6 +73,20 @@ func autoReconcileResearchRuns(e dbExecer) error {
 		WHERE usage_known=0 
 		  AND job_id IN (SELECT id FROM ai_jobs WHERE status IN ('expired', 'failed', 'cancelled', 'completed'))
 	`)
+	_, _ = e.Exec(`
+		DELETE FROM ai_jobs 
+		WHERE status IN ('expired', 'cancelled') 
+		  AND id NOT IN (
+		    SELECT id FROM ai_jobs 
+		    WHERE status IN ('expired', 'cancelled') 
+		    ORDER BY created_at DESC 
+		    LIMIT 3
+		  )
+	`)
+	cutoff7d := now.AddDate(0, 0, -7).UTC().Format(time.RFC3339Nano)
+	_, _ = e.Exec("DELETE FROM ai_jobs WHERE status='completed' AND created_at < ?", cutoff7d)
+	cutoff30d := now.AddDate(0, 0, -30).In(time.FixedZone("Asia/Shanghai", 8*3600)).Format("2006-01-02")
+	_, _ = e.Exec("DELETE FROM automatic_research_runs WHERE day < ?", cutoff30d)
 	return err
 }
 
@@ -277,6 +291,7 @@ func (s *Server) settleAutomaticResearchManual(w http.ResponseWriter, r *http.Re
 		writeError(w, 503, "结算未确认用量失败")
 		return
 	}
+	_, _ = db.Exec("DELETE FROM ai_jobs WHERE status IN ('expired', 'cancelled')")
 	s.renderAutomaticResearch(w, r, db, p)
 }
 

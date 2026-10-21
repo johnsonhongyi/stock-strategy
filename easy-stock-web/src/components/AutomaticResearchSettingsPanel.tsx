@@ -94,7 +94,9 @@ export function AutomaticResearchSettingsPanel({ config, open, view = 'settings'
       setRecordPage(data.records_page);
       setDraft(data.policy);
       dirty.current = false;
-      setNotice('已处理结算未确认用量，自动投研后台工作流程已恢复。');
+      setNotice(data.usage.unsettled_runs > 0
+        ? `对账完成，仍有 ${data.usage.unsettled_runs} 条任务在执行中。`
+        : '已完成用量对账与结算，自动投研后台工作流程正常运行。');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '处理结算失败');
     } finally {
@@ -141,17 +143,15 @@ export function AutomaticResearchSettingsPanel({ config, open, view = 'settings'
         <div className="automatic-research-summary-heading">
           <div><strong>自动 AI 投研</strong><span className={`automatic-research-badge ${statusKind}`}>{status}</span></div>
           <div className="automatic-research-summary-actions">
-            {hasUnsettled && (
-              <button
-                type="button"
-                className="automatic-research-settle-btn"
-                disabled={busy}
-                onClick={() => void settle()}
-                title="清除未确认/超时的用量锁定，恢复后台自动投研工作流"
-              >
-                {busy ? '正在结算...' : '结算并恢复'}
-              </button>
-            )}
+            <button
+              type="button"
+              className={`automatic-research-settle-btn ${hasUnsettled ? 'warn' : 'ready'}`}
+              disabled={busy}
+              onClick={() => void settle()}
+              title="清除未确认/超时的用量锁定，恢复后台自动投研工作流"
+            >
+              {busy ? '正在结算...' : hasUnsettled ? `⚡ 结算并恢复 (${snapshot?.usage.unsettled_runs ?? 0})` : '结算并恢复'}
+            </button>
             {onOpenSettings && <button type="button" onClick={onOpenSettings}>系统设置</button>}
           </div>
         </div>
@@ -199,17 +199,15 @@ export function AutomaticResearchSettingsPanel({ config, open, view = 'settings'
           <div className="automatic-research-records-heading">
             <h4>最近运行记录 <small>{recordTotal} 条</small></h4>
             <div className="automatic-research-records-actions">
-              {snapshot.usage.unsettled_runs > 0 && (
-                <button
-                  type="button"
-                  className="automatic-research-settle-btn-small"
-                  disabled={busy}
-                  onClick={() => void settle()}
-                  title="处理未结算任务并恢复调度"
-                >
-                  {busy ? '结算中...' : '一键处理结算并恢复'}
-                </button>
-              )}
+              <button
+                type="button"
+                className={`automatic-research-settle-btn-small ${snapshot.usage.unsettled_runs > 0 ? 'warn' : 'ready'}`}
+                disabled={busy}
+                onClick={() => void settle()}
+                title="清理过期任务、对账未确认用量并恢复后台调度"
+              >
+                {busy ? '结算中...' : snapshot.usage.unsettled_runs > 0 ? `⚡ 一键处理结算并恢复 (${snapshot.usage.unsettled_runs})` : '一键处理结算并恢复'}
+              </button>
               <button type="button" disabled={busy} onClick={() => void refresh()}>刷新</button>
             </div>
           </div>
