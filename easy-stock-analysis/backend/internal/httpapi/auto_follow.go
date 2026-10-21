@@ -201,13 +201,14 @@ func (s *Server) autoFollowCommand(w http.ResponseWriter, r *http.Request) {
 		payload = string(b)
 	case "settings":
 		var settings struct {
-			LimitUp    *bool    `json:"limit_up"`
-			ThemeTrend *bool    `json:"theme_trend"`
-			ThemeIDs   []string `json:"theme_ids"`
+			LimitUp       *bool    `json:"limit_up"`
+			ThemeTrend    *bool    `json:"theme_trend"`
+			ThemeIDs      []string `json:"theme_ids"`
+			ManualSymbols []string `json:"manual_symbols,omitempty"`
 		}
 		d := json.NewDecoder(strings.NewReader(string(input.Settings)))
 		d.DisallowUnknownFields()
-		if d.Decode(&settings) != nil || settings.LimitUp == nil || settings.ThemeTrend == nil || len(settings.ThemeIDs) > 10 {
+		if d.Decode(&settings) != nil || settings.LimitUp == nil || settings.ThemeTrend == nil || len(settings.ThemeIDs) > 10 || len(settings.ManualSymbols) > 30 {
 			writeError(w, 400, "跟随配置无效")
 			return
 		}
@@ -217,8 +218,17 @@ func (s *Server) autoFollowCommand(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		for _, sym := range settings.ManualSymbols {
+			if len(sym) == 0 || len(sym) > 20 || strings.ContainsAny(sym, "\r\n\x00") {
+				writeError(w, 400, "自定义股票代码无效")
+				return
+			}
+		}
 		if settings.ThemeIDs == nil {
 			settings.ThemeIDs = []string{}
+		}
+		if settings.ManualSymbols == nil {
+			settings.ManualSymbols = []string{}
 		}
 		b, _ := json.Marshal(settings)
 		payload = string(b)
