@@ -149,9 +149,23 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         void refresh();
+        let lastExpiredAt = 0;
         const expired = () => {
-            setStatus(undefined);
-            void refresh();
+            const now = Date.now();
+            if (now - lastExpiredAt < 3000) {
+                return;
+            }
+            lastExpiredAt = now;
+            // 静默核验 session 状态，绝不盲目 setStatus(undefined) 导致页面在 iPhone/移动端疯狂卸载挂载闪烁
+            api<Status>('status')
+                .then(latestStatus => {
+                    if (!latestStatus.authenticated) {
+                        setStatus(latestStatus);
+                    }
+                })
+                .catch(() => {
+                    // 网络抖动时保持现有界面，避免白屏
+                });
         };
         window.addEventListener('stock-auth-required', expired);
         const timer = window.setInterval(() => void refresh(), 60000);
@@ -453,7 +467,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
                                     style={fieldStyle}
                                     name="username"
                                     aria-label="用户名"
-                                    placeholder="请输入用户名（如 johnson / lili）"
+                                    placeholder="请输入用户名"
                                     autoComplete="username"
                                     required
                                     maxLength={64}
@@ -846,7 +860,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
                                                     style={fieldStyle}
                                                     value={newUsername}
                                                     onChange={e => setNewUsername(e.target.value)}
-                                                    placeholder="用户名（如 lili）"
+                                                    placeholder="请输入新用户名"
                                                     required
                                                     maxLength={64}
                                                     autoComplete="off"

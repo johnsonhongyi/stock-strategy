@@ -551,7 +551,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isLinkage && !setupImport && !s.authorizedLinkage(r) || !isLinkage && !s.authorized(r) {
-		writeError(loggedWriter, http.StatusUnauthorized, "unauthorized")
+		status := http.StatusUnauthorized
+		if s.webAuth != nil {
+			if _, ok := s.webAuth.user(r); ok {
+				status = http.StatusForbidden
+			}
+		}
+		writeError(loggedWriter, status, "unauthorized")
 		return
 	}
 	s.mux.ServeHTTP(loggedWriter, r)

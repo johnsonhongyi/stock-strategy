@@ -62,8 +62,18 @@ func (s *Server) authorizedLinkage(r *http.Request) bool {
 			break
 		}
 	}
-	if !peer && s.authorizedLinkageAdmin(r) {
-		return true
+	if !peer {
+		if s.webAuth != nil {
+			if u, ok := s.webAuth.user(r); ok {
+				// 任何已登录的 Web 用户均有权读取联动目标与行情上下文等只读视图
+				if r.Method == http.MethodGet || r.Method == http.MethodHead || u.Admin {
+					return true
+				}
+			}
+		}
+		if s.authorizedLinkageAdmin(r) {
+			return true
+		}
 	}
 	if s.linkage == nil {
 		return false

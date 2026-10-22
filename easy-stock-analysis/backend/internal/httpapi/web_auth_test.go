@@ -337,6 +337,23 @@ func TestWebAuthUserManagementCRUD(t *testing.T) {
 		t.Fatalf("must protect johnson admin status: %d", w.Code)
 	}
 
+	// 6.1 将 lili 降回普通用户，并验证普通用户读取联动 targets 允许访问 (鉴权通过，不报 401)
+	w = req("PUT", "/api/auth/users", `{"username":"lili","admin":false}`, adminCookie)
+	if w.Code != 200 {
+		t.Fatalf("demote lili failed: %d", w.Code)
+	}
+	rLinkage := httptest.NewRequest("GET", "https://johnsonhongyi.asuscomm.com/api/v1/linkage/targets", nil)
+	rLinkage.RemoteAddr = "172.20.0.3:1234"
+	rLinkage.AddCookie(liliCookie)
+	wLinkage := httptest.NewRecorder()
+	handledLinkage := s.handleWebAuth(wLinkage, rLinkage)
+	if handledLinkage && wLinkage.Code == 401 {
+		t.Fatalf("regular user lili must not be blocked by handleWebAuth with 401: %d", wLinkage.Code)
+	}
+	if !s.authorizedLinkage(rLinkage) {
+		t.Fatal("regular user lili should be authorized for read-only linkage request")
+	}
+
 	// 7. 管理员重置他人密码
 	w = req("POST", "/api/auth/reset-password", `{"username":"lili","password":"newpassword888"}`, adminCookie)
 	if w.Code != 200 {
