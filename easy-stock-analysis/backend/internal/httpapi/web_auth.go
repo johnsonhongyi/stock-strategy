@@ -91,6 +91,17 @@ func sessionHash(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])
 }
+func (a *webAuthStore) clearUserFailures(username string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	suffix := "|" + strings.ToLower(strings.TrimSpace(username))
+	for k := range a.failures {
+		if strings.HasSuffix(k, suffix) {
+			delete(a.failures, k)
+		}
+	}
+}
+
 func (a *webAuthStore) user(r *http.Request) (webUser, bool) {
 	var u webUser
 	c, err := r.Cookie(webCookie)
@@ -189,7 +200,10 @@ func (s *Server) handleWebAuth(w http.ResponseWriter, r *http.Request) bool {
 		writeJSON(w, 200, map[string]any{"authenticated": logged, "lan": webLAN(r), "user": u})
 		return true
 	}
-	if r.Method != http.MethodPost && !(path == "/api/auth/users" && r.Method == http.MethodGet) {
+	isUsersEndpoint := path == "/api/auth/users"
+	validMethod := r.Method == http.MethodPost ||
+		(isUsersEndpoint && (r.Method == http.MethodGet || r.Method == http.MethodPut || r.Method == http.MethodDelete))
+	if !validMethod {
 		writeError(w, 405, "method not allowed")
 		return true
 	}
@@ -198,16 +212,25 @@ func (s *Server) handleWebAuth(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	var input struct {
+		ID          int64  `json:"id"`
 		Username    string `json:"username"`
 		Password    string `json:"password"`
 		OldPassword string `json:"old_password"`
-		Admin       bool   `json:"admin"`
+		Admin       *bool  `json:"admin"`
 	}
-	if r.Method == http.MethodPost {
+	if r.Method == http.MethodPost || r.Method == http.MethodPut || (r.Method == http.MethodDelete && r.Body != nil && r.ContentLength > 0) {
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err.Error() != "EOF" {
 			writeError(w, 400, "invalid request")
 			return true
+		}
+	}
+	if r.Method == http.MethodDelete && input.ID == 0 && input.Username == "" {
+		if qID := r.URL.Query().Get("id"); qID != "" {
+			fmt.Sscanf(qID, "%d", &input.ID)
+		}
+		if qUser := r.URL.Query().Get("username"); qUser != "" {
+			input.Username = qUser
 		}
 	}
 	setCookie := func(value string, age int) {
@@ -225,7 +248,7 @@ func (s *Server) handleWebAuth(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		var salt, stored string
-		err := a.db.QueryRow(`SELECT id,username,admin,salt,password FROM web_users WHERE username=?`, strings.TrimSpace(input.Username)).Scan(&u.ID, &u.Username, &u.Admin, &salt, &stored)
+		err := a.db.QueryRow(`SELECT id,username,admin,salt,password FROM web_users WHERE LOWER(username)=LOWER(?)`, strings.TrimSpace(input.Username)).Scan(&u.ID, &u.Username, &u.Admin, &salt, &stored)
 		if err != nil {
 			salt = "00000000000000000000000000000000"
 		}
@@ -305,20 +328,117 @@ func (s *Server) handleWebAuth(w http.ResponseWriter, r *http.Request) bool {
 			writeJSON(w, 200, users)
 			return true
 		}
+		if r.Method == http.MethodDelete {
+			targetID := input.ID
+			var targetUsername string
+			var targetAdmin bool
+			var err error
+			if targetID > 0 {
+				err = a.db.QueryRow(`SELECT id,username,admin FROM web_users WHERE id=?`, targetID).Scan(&targetID, &targetUsername, &targetAdmin)
+			} else if strings.TrimSpace(input.Username) != "" {
+				err = a.db.QueryRow(`SELECT id,username,admin FROM web_users WHERE LOWER(username)=LOWER(?)`, strings.TrimSpace(input.Username)).Scan(&targetID, &targetUsername, &targetAdmin)
+			} else {
+				writeError(w, 400, "缺少待删除用户标识")
+				return true
+			}
+			if err != nil {
+				writeError(w, 404, "用户不存在")
+				return true
+			}
+			if strings.EqualFold(targetUsername, "johnson") || targetID == 1 {
+				writeError(w, 400, "系统默认主管理员不可删除")
+				return true
+			}
+			if targetID == u.ID {
+				writeError(w, 400, "不可删除当前登录账号")
+				return true
+			}
+			tx, err := a.db.Begin()
+			if err != nil {
+				writeError(w, 500, "删除失败")
+				return true
+			}
+			defer tx.Rollback()
+			if _, err = tx.Exec(`DELETE FROM web_sessions WHERE user_id=?`, targetID); err != nil {
+				writeError(w, 500, "会话清理失败")
+				return true
+			}
+			if _, err = tx.Exec(`DELETE FROM web_users WHERE id=?`, targetID); err != nil {
+				writeError(w, 500, "用户删除失败")
+				return true
+			}
+			if err = tx.Commit(); err != nil {
+				writeError(w, 500, "删除提交失败")
+				return true
+			}
+			a.clearUserFailures(targetUsername)
+			writeJSON(w, 200, map[string]bool{"ok": true})
+			return true
+		}
+		if r.Method == http.MethodPut {
+			targetID := input.ID
+			var targetUsername string
+			var currentAdmin bool
+			var err error
+			if targetID > 0 {
+				err = a.db.QueryRow(`SELECT id,username,admin FROM web_users WHERE id=?`, targetID).Scan(&targetID, &targetUsername, &currentAdmin)
+			} else if strings.TrimSpace(input.Username) != "" {
+				err = a.db.QueryRow(`SELECT id,username,admin FROM web_users WHERE LOWER(username)=LOWER(?)`, strings.TrimSpace(input.Username)).Scan(&targetID, &targetUsername, &currentAdmin)
+			} else {
+				writeError(w, 400, "缺少待修改用户标识")
+				return true
+			}
+			if err != nil {
+				writeError(w, 404, "用户不存在")
+				return true
+			}
+			if input.Admin != nil {
+				newAdmin := *input.Admin
+				if (strings.EqualFold(targetUsername, "johnson") || targetID == 1) && !newAdmin {
+					writeError(w, 400, "系统默认主管理员权限不可取消")
+					return true
+				}
+				if targetID == u.ID && !newAdmin {
+					writeError(w, 400, "不可取消当前登录管理员自身权限")
+					return true
+				}
+				adminInt := 0
+				if newAdmin {
+					adminInt = 1
+				}
+				if _, err = a.db.Exec(`UPDATE web_users SET admin=? WHERE id=?`, adminInt, targetID); err != nil {
+					writeError(w, 500, "角色更新失败")
+					return true
+				}
+			}
+			writeJSON(w, 200, map[string]bool{"ok": true})
+			return true
+		}
 		input.Username = strings.TrimSpace(input.Username)
 		if len(input.Username) < 1 || len(input.Username) > 64 || len(input.Password) < 8 || len(input.Password) > 256 {
 			writeError(w, 400, "用户名1–64字符，密码8–256字节")
 			return true
 		}
+		var existingCount int
+		_ = a.db.QueryRow(`SELECT COUNT(*) FROM web_users WHERE LOWER(username)=LOWER(?)`, input.Username).Scan(&existingCount)
+		if existingCount > 0 {
+			writeError(w, 400, "添加失败，用户名可能已存在")
+			return true
+		}
+		adminInt := 0
+		if input.Admin != nil && *input.Admin {
+			adminInt = 1
+		}
 		salt := randomHex()
 		hash, err := passwordHash(input.Password, salt)
 		if err == nil {
-			_, err = a.db.Exec(`INSERT INTO web_users(username,salt,password,admin) VALUES(?,?,?,?)`, input.Username, salt, hash, input.Admin)
+			_, err = a.db.Exec(`INSERT INTO web_users(username,salt,password,admin) VALUES(?,?,?,?)`, input.Username, salt, hash, adminInt)
 		}
 		if err != nil {
 			writeError(w, 400, "添加失败，用户名可能已存在")
 			return true
 		}
+		a.clearUserFailures(input.Username)
 		writeJSON(w, 201, map[string]bool{"ok": true})
 	case "/api/auth/password", "/api/auth/reset-password":
 		if !logged {
@@ -330,25 +450,43 @@ func (s *Server) handleWebAuth(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		reset := path == "/api/auth/reset-password"
+		targetID := u.ID
+		targetUsername := u.Username
 		if reset {
 			if !u.Admin {
 				writeError(w, 403, "需要管理员登录")
 				return true
 			}
-			if err := a.db.QueryRow(`SELECT id FROM web_users WHERE username=?`, strings.TrimSpace(input.Username)).Scan(&u.ID); err != nil {
+			var foundID int64
+			var foundUsername string
+			var queryErr error
+			if input.ID > 0 {
+				queryErr = a.db.QueryRow(`SELECT id, username FROM web_users WHERE id=?`, input.ID).Scan(&foundID, &foundUsername)
+			} else {
+				queryErr = a.db.QueryRow(`SELECT id, username FROM web_users WHERE LOWER(username)=LOWER(?)`, strings.TrimSpace(input.Username)).Scan(&foundID, &foundUsername)
+			}
+			if queryErr != nil {
 				writeError(w, 404, "用户不存在")
 				return true
 			}
+			targetID = foundID
+			targetUsername = foundUsername
 		}
 		var salt, stored string
-		err := a.db.QueryRow(`SELECT salt,password FROM web_users WHERE id=?`, u.ID).Scan(&salt, &stored)
-		hash, e := passwordHash(input.OldPassword, salt)
-		if err != nil || (!reset && (e != nil || subtle.ConstantTimeCompare([]byte(hash), []byte(stored)) != 1)) {
-			writeError(w, 400, "原密码错误")
+		err := a.db.QueryRow(`SELECT salt,password FROM web_users WHERE id=?`, targetID).Scan(&salt, &stored)
+		if err != nil {
+			writeError(w, 404, "用户不存在")
 			return true
 		}
+		if !reset {
+			hash, e := passwordHash(input.OldPassword, salt)
+			if e != nil || subtle.ConstantTimeCompare([]byte(hash), []byte(stored)) != 1 {
+				writeError(w, 400, "原密码错误")
+				return true
+			}
+		}
 		salt = randomHex()
-		hash, err = passwordHash(input.Password, salt)
+		hash, err := passwordHash(input.Password, salt)
 		if err != nil {
 			writeError(w, 500, "修改失败")
 			return true
@@ -359,7 +497,7 @@ func (s *Server) handleWebAuth(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		defer tx.Rollback()
-		result, err := tx.Exec(`UPDATE web_users SET salt=?,password=? WHERE id=? AND password=?`, salt, hash, u.ID, stored)
+		result, err := tx.Exec(`UPDATE web_users SET salt=?,password=? WHERE id=? AND password=?`, salt, hash, targetID, stored)
 		if err == nil {
 			n, e := result.RowsAffected()
 			if e != nil || n != 1 {
@@ -367,7 +505,7 @@ func (s *Server) handleWebAuth(w http.ResponseWriter, r *http.Request) bool {
 			}
 		}
 		if err == nil {
-			_, err = tx.Exec(`DELETE FROM web_sessions WHERE user_id=?`, u.ID)
+			_, err = tx.Exec(`DELETE FROM web_sessions WHERE user_id=?`, targetID)
 		}
 		if err == nil {
 			err = tx.Commit()
@@ -376,7 +514,8 @@ func (s *Server) handleWebAuth(w http.ResponseWriter, r *http.Request) bool {
 			writeError(w, 500, "修改失败，请重试")
 			return true
 		}
-		if caller, ok := a.user(r); !ok || caller.ID == u.ID {
+		a.clearUserFailures(targetUsername)
+		if caller, ok := a.user(r); !ok || caller.ID == targetID {
 			setCookie("", -1)
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})

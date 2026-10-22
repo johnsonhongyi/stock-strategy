@@ -260,3 +260,121 @@ func TestWebAuthBootstrapRequiresSecretOnlyForEmptyStore(t *testing.T) {
 		t.Fatal("bootstrap user changed")
 	}
 }
+
+func TestWebAuthUserManagementCRUD(t *testing.T) {
+	t.Setenv("A_STOCK_BOOTSTRAP_PASSWORD", "admin-master-password")
+	path := filepath.Join(t.TempDir(), "users_crud.db")
+	a, err := openWebAuth(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.db.Close()
+	s := &Server{webAuth: a}
+	req := func(method, path, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "https://johnsonhongyi.asuscomm.com"+path, strings.NewReader(body))
+		r.RemoteAddr = "172.20.0.3:1234"
+		if cookie != nil {
+			r.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		if !s.handleWebAuth(w, r) {
+			w.WriteHeader(204)
+		}
+		return w
+	}
+	// 1. johnson 管理员登录
+	w := req("POST", "/api/auth/login", `{"username":"johnson","password":"admin-master-password"}`, nil)
+	if w.Code != 200 {
+		t.Fatalf("johnson login failed: %d %s", w.Code, w.Body)
+	}
+	adminCookie := w.Result().Cookies()[0]
+
+	// 2. 添加普通用户 lili
+	w = req("POST", "/api/auth/users", `{"username":"lili","password":"password123","admin":false}`, adminCookie)
+	if w.Code != 201 {
+		t.Fatalf("create lili failed: %d %s", w.Code, w.Body)
+	}
+
+	// 3. 用户名大小写容错测试：输入 "Lili" 登录 lili
+	w = req("POST", "/api/auth/login", `{"username":"Lili","password":"password123"}`, nil)
+	if w.Code != 200 {
+		t.Fatalf("case-insensitive login failed: %d %s", w.Code, w.Body)
+	}
+	liliCookie := w.Result().Cookies()[0]
+
+	// 4. 重复添加相同用户名拦截
+	w = req("POST", "/api/auth/users", `{"username":"LILI","password":"password123"}`, adminCookie)
+	if w.Code != 400 {
+		t.Fatalf("duplicate username check failed: %d", w.Code)
+	}
+
+	// 5. 修改 lili 角色为管理员 (PUT /api/auth/users)
+	w = req("PUT", "/api/auth/users", `{"username":"lili","admin":true}`, adminCookie)
+	if w.Code != 200 {
+		t.Fatalf("promote lili failed: %d %s", w.Code, w.Body)
+	}
+	w = req("GET", "/api/auth/users", "", adminCookie)
+	var userList []webUser
+	if err := json.Unmarshal(w.Body.Bytes(), &userList); err != nil || len(userList) != 2 {
+		t.Fatalf("unmarshal users failed: %v", err)
+	}
+	var liliFound bool
+	for _, u := range userList {
+		if strings.EqualFold(u.Username, "lili") {
+			liliFound = true
+			if !u.Admin {
+				t.Fatal("lili should be admin after promotion")
+			}
+		}
+	}
+	if !liliFound {
+		t.Fatal("lili not found in user list")
+	}
+
+	// 6. 安全拦截：禁止取消 johnson 系统主管理员权限
+	w = req("PUT", "/api/auth/users", `{"username":"johnson","admin":false}`, adminCookie)
+	if w.Code != 400 {
+		t.Fatalf("must protect johnson admin status: %d", w.Code)
+	}
+
+	// 7. 管理员重置他人密码
+	w = req("POST", "/api/auth/reset-password", `{"username":"lili","password":"newpassword888"}`, adminCookie)
+	if w.Code != 200 {
+		t.Fatalf("reset lili password failed: %d %s", w.Code, w.Body)
+	}
+
+	// 8. 旧密码失效，新密码登录成功
+	w = req("POST", "/api/auth/login", `{"username":"lili","password":"password123"}`, nil)
+	if w.Code != 401 {
+		t.Fatalf("old password should fail: %d", w.Code)
+	}
+	w = req("POST", "/api/auth/login", `{"username":"lili","password":"newpassword888"}`, nil)
+	if w.Code != 200 {
+		t.Fatalf("new password login failed: %d %s", w.Code, w.Body)
+	}
+
+	// 9. 安全拦截：禁止删除 johnson
+	w = req("DELETE", "/api/auth/users?username=johnson", "", adminCookie)
+	if w.Code != 400 {
+		t.Fatalf("must protect johnson from deletion: %d", w.Code)
+	}
+
+	// 10. 安全拦截：禁止管理员自杀删除自己
+	w = req("DELETE", "/api/auth/users", `{"username":"johnson"}`, adminCookie)
+	if w.Code != 400 {
+		t.Fatalf("must prevent self deletion: %d", w.Code)
+	}
+
+	// 11. 删除普通用户 lili
+	w = req("DELETE", "/api/auth/users", `{"username":"lili"}`, adminCookie)
+	if w.Code != 200 {
+		t.Fatalf("delete lili failed: %d %s", w.Code, w.Body)
+	}
+
+	// 12. 校验 lili 已不存在，且旧 session 失效
+	w = req("POST", "/api/auth/login", `{"username":"lili","password":"newpassword888"}`, nil)
+	if w.Code != 401 {
+		t.Fatalf("deleted user should not be able to login: %d", w.Code)
+	}
+	_ = liliCookie
+}
