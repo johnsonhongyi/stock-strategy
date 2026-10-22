@@ -28,7 +28,7 @@ import {
 import { desktopModelGroups, resolveDesktopModelSelection, selectedDesktopModelGroup, type DesktopModelGroup } from '../lib/desktop-model-groups';
 import { loadAvailableDesktopChatTargets, loadChatRuntime, saveChatRuntime, type AvailableDesktopChatTarget } from '../lib/desktop-chat';
 import { bridgeTargetLabel } from '../lib/linkage-display';
-import { portfolioDraftToHoldings, portfolioProfiles, readPortfolioDraft, writePortfolioDraft } from '../lib/portfolio-draft';
+import { PortfolioDraft, portfolioDraftToHoldings, portfolioProfiles, readPortfolioDraft, writePortfolioDraft } from '../lib/portfolio-draft';
 import { PortfolioSetupForm } from './PortfolioSetupForm';
 
 type Props = {
@@ -197,9 +197,26 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 			]);
 			setDirectory(directoryPayload.data.stocks || []);
 			cacheDirectory(directoryPayload.data.stocks || []);
-			setHistory(jobsPayload.data || []);
-			const active = jobsPayload.data?.find((item) => item.status === 'running');
-			if (active) setJob(active);
+			const jobList = jobsPayload.data || [];
+			setHistory(jobList);
+			const active = jobList.find((item) => item.status === 'running');
+			setJob(current => current ? jobList.find(item => item.id === current.id) || current : active || null);
+			if (readPortfolioDraft().holdings.length === 0 && jobList.length > 0) {
+				const latestSucceeded = jobList.find((item) => item.status === 'succeeded' && item.request?.holdings?.length > 0);
+				if (latestSucceeded) {
+					const inherited: PortfolioDraft = {
+						profile: latestSucceeded.request.trader_profile,
+						holdings: latestSucceeded.request.holdings.map((h) => ({
+							symbol: h.symbol,
+							name: h.name || h.symbol,
+							weight: h.weight_percent,
+							costPrice: h.cost_price ? String(h.cost_price) : '',
+						})),
+					};
+					setDraft(inherited);
+					writePortfolioDraft(inherited);
+				}
+			}
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : '持仓巡检数据加载失败');
 		} finally {
@@ -235,8 +252,10 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 		return () => { active = false; window.clearInterval(timer); };
 	}, [config, job?.id, job?.status]);
 
-	const startInspection = async () => {
-		if (!config || !runtimeReady || draft.holdings.length === 0 || totalWeight > 100) return;
+	const startInspection = async (customDraft?: PortfolioDraft, baseInspectionID?: string) => {
+		const targetDraft = customDraft || draft;
+		const targetWeight = targetDraft.holdings.reduce((total, item) => total + item.weight, 0);
+		if (!config || !runtimeReady || targetDraft.holdings.length === 0 || targetWeight > 100) return;
 		setStarting(true);
 		setError('');
 		setNotice('');
@@ -245,25 +264,57 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					trader_profile: draft.profile,
-					holdings: portfolioDraftToHoldings(draft.holdings),
+					trader_profile: targetDraft.profile,
+					holdings: portfolioDraftToHoldings(targetDraft.holdings),
 					ai_provider: runtimePreference.provider,
+					...(baseInspectionID ? { previous_inspection_id: baseInspectionID } : {}),
 					...(isInspectionDesktopProvider(runtimePreference.provider) && resolvedModel && selectedTarget ? {
 						model: resolvedModel.model,
 						reasoning_effort: resolvedModel.reasoning_effort,
 						desktop_node_id: selectedTarget.node_id,
 						desktop_workspace_id: selectedTarget.workspace_id,
-				} : {}),
+					} : {}),
 				}),
 			});
 			setJob(payload.data);
 			setHistory((current) => [payload.data, ...current.filter((item) => item.id !== payload.data.id)].slice(0, 12));
-			setNotice('巡检已在后台开始，离开当前页面不会中断，可以先使用其他功能');
+			setNotice(baseInspectionID ? '已继承交易风格与持仓，正在结合最新交易日走势启动走势审核与更新巡检…' : '巡检已在后台开始，离开当前页面不会中断，可以先使用其他功能');
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : '持仓巡检启动失败');
 		} finally {
 			setStarting(false);
 		}
+	};
+
+	const handleUpdateInspection = (item: PortfolioInspectionJob) => {
+		const targetDraft: PortfolioDraft = {
+			profile: item.request.trader_profile,
+			holdings: item.request.holdings.map((h) => ({
+				symbol: h.symbol,
+				name: h.name || h.symbol,
+				weight: h.weight_percent,
+				costPrice: h.cost_price ? String(h.cost_price) : '',
+			})),
+		};
+		setDraft(targetDraft);
+		writePortfolioDraft(targetDraft);
+		void startInspection(targetDraft, item.id);
+	};
+
+	const handleLoadToDraft = (item: PortfolioInspectionJob) => {
+		const targetDraft: PortfolioDraft = {
+			profile: item.request.trader_profile,
+			holdings: item.request.holdings.map((h) => ({
+				symbol: h.symbol,
+				name: h.name || h.symbol,
+				weight: h.weight_percent,
+				costPrice: h.cost_price ? String(h.cost_price) : '',
+			})),
+		};
+		setDraft(targetDraft);
+		writePortfolioDraft(targetDraft);
+		setJob(null);
+		setNotice(`已载入 ${profileLabel(item.request.trader_profile)}型持仓（${targetDraft.holdings.length} 只股票），可微调后更新巡检`);
 	};
 
 	const deleteInspection = async (item: PortfolioInspectionJob) => {
@@ -292,8 +343,25 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 				{history.map((item) => <div className={`portfolio-history-item ${job?.id === item.id ? 'active' : ''}`} key={item.id}>
 					<button type="button" className="portfolio-history-select" onClick={() => setJob(item)}>
 						<span>{item.status === 'running' ? <LoaderCircle className="spin" size={14} /> : item.status === 'succeeded' ? <CheckCircle2 size={14} /> : <CircleAlert size={14} />}</span>
-						<div><strong>{item.request.holdings.length} 只持仓 · {profileLabel(item.request.trader_profile)}</strong><small>{inspectionProviderLabel(item.request.ai_provider)}{item.request.model ? ` · ${item.request.model} / ${item.request.reasoning_effort || '默认'}` : ''}</small><small>{formatDate(item.updated_at || item.started_at)}</small></div>
+						<div>
+							<strong>{item.request.holdings.length} 只持仓 · {profileLabel(item.request.trader_profile)}</strong>
+							<small>{inspectionProviderLabel(item.request.ai_provider)}{item.request.model ? ` · ${item.request.model} / ${item.request.reasoning_effort || '默认'}` : ''}</small>
+							<small>{formatDate(item.updated_at || item.started_at)}{item.request.previous_inspection_id ? ' · 走势复检' : ''}</small>
+						</div>
 						<ChevronRight size={14} />
+					</button>
+					<button
+						type="button"
+						className="portfolio-history-update"
+						aria-label="更新巡检"
+						title={item.status === 'running' ? '任务运行中' : '结合最新走势更新巡检（自动继承风格与持仓）'}
+						disabled={item.status === 'running' || starting || running}
+						onClick={(e) => {
+							e.stopPropagation();
+							handleUpdateInspection(item);
+						}}
+					>
+						<RefreshCw size={13} />
 					</button>
 					<button type="button" className="portfolio-history-delete" aria-label="删除巡检记录" title={item.status === 'running' ? '任务运行中' : '删除记录'} disabled={item.status === 'running' || deletingInspectionID === item.id} onClick={() => void deleteInspection(item)}><Trash2 size={13} /></button>
 				</div>)}
@@ -325,7 +393,7 @@ export function PortfolioInspectionWorkspace({ config, refreshKey, onOpenSetting
 			</>}
 
 			{job?.status === 'running' && <InspectionProgress job={job} />}
-			{job?.report && job.status !== 'running' && <PortfolioReportView report={job.report} status={job.status} onNew={() => setJob(null)} onOpenStockAnalysis={onOpenStockAnalysis} />}
+			{job?.report && job.status !== 'running' && <PortfolioReportView job={job} report={job.report} status={job.status} onUpdate={handleUpdateInspection} onLoadToDraft={handleLoadToDraft} onNew={() => setJob(null)} onOpenStockAnalysis={onOpenStockAnalysis} />}
 		</section>
 	</div>;
 }
@@ -340,7 +408,7 @@ function InspectionProgress({ job }: { job: PortfolioInspectionJob }) {
 	</section>;
 }
 
-function PortfolioReportView({ report, status, onNew, onOpenStockAnalysis }: { report: PortfolioInspectionReport; status: string; onNew: () => void; onOpenStockAnalysis: (analysis: StockAIAnalysis) => void }) {
+export function PortfolioReportView({ job, report, status, onUpdate, onLoadToDraft, onNew, onOpenStockAnalysis }: { job: PortfolioInspectionJob; report: PortfolioInspectionReport; status: string; onUpdate: (job: PortfolioInspectionJob) => void; onLoadToDraft: (job: PortfolioInspectionJob) => void; onNew: () => void; onOpenStockAnalysis: (analysis: StockAIAnalysis) => void }) {
 	const { conclusion, metrics } = report;
 	const isV2 = report.algorithm_version === 'portfolio-health-v2';
 	const names = new Map(report.holdings.map((item) => [item.holding.symbol, item.analysis?.name || item.holding.name || item.holding.symbol]));
@@ -353,7 +421,35 @@ function PortfolioReportView({ report, status, onNew, onOpenStockAnalysis }: { r
 		analyses.set(item.analysis.symbol.split('.')[0], item.analysis);
 	});
 	return <div className="portfolio-report">
-		<header className="portfolio-report-header"><div><span><WalletCards size={15} />持仓 AI 巡检报告</span><h2>{report.profile.label}型组合 · {conclusion.risk_level}风险</h2><p>{formatDate(report.generated_at)} · 覆盖 {metrics.coverage_percent}% · {conclusion.source === 'hermes-ai' ? 'AI 综合研判' : '本地规则研判'}</p></div><button type="button" onClick={onNew}><Plus size={15} />新建巡检</button></header>
+		<header className="portfolio-report-header">
+			<div>
+				<span><WalletCards size={15} />持仓 AI 巡检报告</span>
+				<h2>{report.profile.label}型组合 · {conclusion.risk_level}风险</h2>
+				<p>
+					{formatDate(report.generated_at)} · 覆盖 {metrics.coverage_percent}% · {conclusion.source === 'hermes-ai' ? 'AI 综合研判' : '本地规则研判'}
+					{report.audit_base_date && ` · 审核对比基线 ${formatDate(report.audit_base_date)}`}
+				</p>
+			</div>
+			<div className="portfolio-report-actions">
+				<button type="button" className="primary" onClick={() => onUpdate(job)} title="结合最新交易日走势重新研判（自动继承当前交易风格与持仓配置）">
+					<RefreshCw size={14} />更新巡检（审核新走势）
+				</button>
+				<button type="button" onClick={() => onLoadToDraft(job)} title="将该记录的风格与持仓载入为草稿，方便微调股票或仓位">
+					<WalletCards size={14} />载入此配置
+				</button>
+				<button type="button" onClick={onNew} title="新建空白持仓巡检">
+					<Plus size={14} />新建巡检
+				</button>
+			</div>
+		</header>
+		{conclusion.audit_summary && <section className="portfolio-audit-banner">
+			<header>
+				<RefreshCw size={15} />
+				<strong>新交易日走势审核与策略更新</strong>
+				{report.audit_base_date && <small>对比前次评估：{formatDate(report.audit_base_date)}</small>}
+			</header>
+			<p>{conclusion.audit_summary}</p>
+		</section>}
 		{status === 'partial' && <div className="portfolio-report-warning"><CircleAlert size={15} />报告已生成，但部分个股或组合分析使用降级结果。</div>}
 		{metrics.stop_loss_coverage_percent !== undefined && metrics.stop_loss_coverage_percent < 100 && <div className="portfolio-report-warning"><CircleAlert size={15} />有效静态止损仅覆盖 {metrics.stop_loss_coverage_percent}% 的持仓；其余风险未估算，不能视为零风险。</div>}
 		{isV2 ? <section className="portfolio-report-overview">
@@ -377,7 +473,20 @@ function PortfolioReportView({ report, status, onNew, onOpenStockAnalysis }: { r
 		<section className="portfolio-holding-report"><header><strong>逐股巡检</strong><small>按组合风险贡献排序</small></header><div>
 			{conclusion.holdings.map((item) => {
 				const stockAnalysis = analyses.get(item.symbol) || analyses.get(item.symbol.split('.')[0]);
-				return <article key={item.symbol}><header><div><strong>{names.get(item.symbol) || item.symbol}</strong><span>{item.symbol} · {item.portfolio_role}</span></div><em className={priorityTone(item.action_priority)}>{item.action_priority}</em><b>{item.risk_contribution.toFixed(1)}% 风险贡献</b>{stockAnalysis && <button type="button" className="portfolio-open-stock" onClick={() => onOpenStockAnalysis(stockAnalysis)} aria-label={`查看${stockAnalysis.name}个股分析报告`} title="查看已生成的个股分析报告"><ExternalLink size={14} />查看个股报告</button>}</header><p>{item.conclusion}</p><div><span><b>动作</b>{item.action}</span><span><b>确认</b>{item.confirmation}</span><span><b>失效</b>{item.invalidation}</span></div></article>;
+				return <article key={item.symbol}>
+					<header>
+						<div><strong>{names.get(item.symbol) || item.symbol}</strong><span>{item.symbol} · {item.portfolio_role}</span></div>
+						<em className={priorityTone(item.action_priority)}>{item.action_priority}</em>
+						<b>{item.risk_contribution.toFixed(1)}% 风险贡献</b>
+						{stockAnalysis && <button type="button" className="portfolio-open-stock" onClick={() => onOpenStockAnalysis(stockAnalysis)} aria-label={`查看${stockAnalysis.name}个股分析报告`} title="查看已生成的个股分析报告"><ExternalLink size={14} />查看个股报告</button>}
+					</header>
+					{(item.previous_action || item.trend_audit) && <div className="portfolio-holding-audit">
+						{item.previous_action && <span><b>前次建议动作：</b>{item.previous_action}</span>}
+						{item.trend_audit && <span><b>新走势审核：</b>{item.trend_audit}</span>}
+					</div>}
+					<p>{item.conclusion}</p>
+					<div><span><b>动作</b>{item.action}</span><span><b>确认</b>{item.confirmation}</span><span><b>失效</b>{item.invalidation}</span></div>
+				</article>;
 			})}
 		</div></section>
 

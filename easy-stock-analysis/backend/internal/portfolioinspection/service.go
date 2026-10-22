@@ -248,23 +248,61 @@ func (s *Service) run(job Job) {
 		s.logger.Printf("level=info event=portfolio_aggregation_start feature=portfolio-inspection job_id=%q coverage=%.1f succeeded=%d total=%d", job.ID, metrics.CoveragePercent, succeededCount(job.Results), len(job.Results))
 	}
 
-	conclusion := localReport(job.Request, job.Results, metrics, rules)
+	var baseline *PreviousInspectionBaseline
+	auditBaseDate := ""
+	if job.Request.PreviousInspectionID != "" {
+		if prevJob, err := s.store.Get(ctx, job.Request.PreviousInspectionID); err == nil && prevJob.Report != nil {
+			auditBaseDate = prevJob.Report.GeneratedAt.Format("2006-01-02 15:04")
+			baseline = &PreviousInspectionBaseline{
+				InspectionID:     prevJob.ID,
+				GeneratedAt:      auditBaseDate,
+				HealthScore:      prevJob.Report.Conclusion.HealthScore,
+				RiskLevel:        prevJob.Report.Conclusion.RiskLevel,
+				ExecutiveSummary: prevJob.Report.Conclusion.ExecutiveSummary,
+				Holdings:         make(map[string]PreviousHoldingBaseline),
+			}
+			for _, h := range prevJob.Report.Conclusion.Holdings {
+				baseline.Holdings[h.Symbol] = PreviousHoldingBaseline{
+					Symbol:         h.Symbol,
+					PortfolioRole:  h.PortfolioRole,
+					ActionPriority: h.ActionPriority,
+					Action:         h.Action,
+					Confirmation:   h.Confirmation,
+					Invalidation:   h.Invalidation,
+					Conclusion:     h.Conclusion,
+				}
+			}
+		}
+	}
+
+	conclusion := localReport(job.Request, job.Results, metrics, rules, baseline)
 	aiErr := error(nil)
 	researchCoverage := researchCoverageForAggregation(job.Results, metrics)
 	if researchCoverage >= MinimumAICoverage {
-		conclusion, aiErr = s.generateAIReport(ctx, job.Request, job.Results, metrics, rules)
+		conclusion, aiErr = s.generateAIReport(ctx, job.Request, job.Results, metrics, rules, baseline)
 	} else {
 		aiErr = fmt.Errorf("有效个股AI研究仅覆盖 %.1f%% 持仓，低于组合结论所需的 %d%%；量化快照不算作AI研究成功", researchCoverage, MinimumAICoverage)
 	}
 	if aiErr != nil {
-		conclusion = localReport(job.Request, job.Results, metrics, rules)
+		conclusion = localReport(job.Request, job.Results, metrics, rules, baseline)
 		conclusion.DataLimitations = append(conclusion.DataLimitations, aiErr.Error())
 		if s.logger != nil {
 			s.logger.Printf("level=warn event=portfolio_aggregation_degraded feature=portfolio-inspection job_id=%q error=%q", job.ID, runtimelog.Redact(aiErr.Error()))
 		}
 	}
 	completedAt := time.Now().UTC()
-	job.Report = &Report{ID: job.ID, PromptVersion: PromptVersion, AlgorithmVersion: AlgorithmVersion, Profile: rules, Holdings: job.Results, Metrics: metrics, Conclusion: conclusion, GeneratedAt: completedAt}
+	job.Report = &Report{
+		ID:                   job.ID,
+		PreviousInspectionID: job.Request.PreviousInspectionID,
+		AuditBaseDate:        auditBaseDate,
+		PromptVersion:        PromptVersion,
+		AlgorithmVersion:     AlgorithmVersion,
+		Profile:              rules,
+		Holdings:             job.Results,
+		Metrics:              metrics,
+		Conclusion:           conclusion,
+		GeneratedAt:          completedAt,
+	}
 	job.ReportAvailable = true
 	job.Stage = "completed"
 	job.UpdatedAt = completedAt
@@ -285,8 +323,8 @@ func (s *Service) run(job Job) {
 	}
 }
 
-func (s *Service) generateAIReport(ctx context.Context, request Request, results []HoldingResult, metrics Metrics, rules ProfileRules) (AIReport, error) {
-	prompt, err := buildPrompt(request, results, metrics, rules)
+func (s *Service) generateAIReport(ctx context.Context, request Request, results []HoldingResult, metrics Metrics, rules ProfileRules, baseline *PreviousInspectionBaseline) (AIReport, error) {
+	prompt, err := buildPrompt(request, results, metrics, rules, baseline)
 	if err != nil {
 		return AIReport{}, err
 	}
@@ -329,6 +367,22 @@ func (s *Service) generateAIReport(ctx context.Context, request Request, results
 	if len(report.Holdings) > len(request.Holdings) {
 		report.Holdings = report.Holdings[:len(request.Holdings)]
 	}
+	if baseline != nil {
+		if strings.TrimSpace(report.AuditSummary) == "" {
+			report.AuditSummary = fmt.Sprintf("本次为对比 %s 前次巡检评估进行的走势审核更新：重点核验各股动作确认与失效条件，动态优化组合配置。", baseline.GeneratedAt)
+		}
+		for i := range report.Holdings {
+			h := &report.Holdings[i]
+			if prevH, ok := baseline.Holdings[h.Symbol]; ok {
+				if h.PreviousAction == "" {
+					h.PreviousAction = prevH.Action
+				}
+				if h.TrendAudit == "" {
+					h.TrendAudit = fmt.Sprintf("对比前次建议【%s】：结合最新走势关注确认【%s】与失效【%s】", firstNonEmpty(prevH.Action, "持股观察"), firstNonEmpty(prevH.Confirmation, "站上均线"), firstNonEmpty(prevH.Invalidation, "跌破止损"))
+				}
+			}
+		}
+	}
 	return report, nil
 }
 
@@ -351,10 +405,15 @@ func normalizeRequest(request Request) (Request, error) {
 	if provider != "hermes" && provider != "codex_desktop" && provider != "antigravity_desktop" {
 		return Request{}, fmt.Errorf("ai_provider must be hermes, codex_desktop or antigravity_desktop")
 	}
+	prevID := strings.TrimSpace(request.PreviousInspectionID)
+	if len(prevID) > 128 {
+		return Request{}, errors.New("previous_inspection_id 长度不能超过 128")
+	}
 	normalized := Request{
 		TraderProfile: request.TraderProfile, Holdings: make([]Holding, 0, len(request.Holdings)),
 		AIProvider: provider, Model: strings.TrimSpace(request.Model), ReasoningEffort: strings.TrimSpace(request.ReasoningEffort),
 		DesktopNodeID: strings.TrimSpace(request.DesktopNodeID), DesktopWorkspaceID: strings.TrimSpace(request.DesktopWorkspaceID),
+		PreviousInspectionID: prevID,
 	}
 	if provider == "hermes" {
 		if normalized.Model != "" || normalized.ReasoningEffort != "" || normalized.DesktopNodeID != "" || normalized.DesktopWorkspaceID != "" {

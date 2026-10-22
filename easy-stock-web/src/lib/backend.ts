@@ -1086,6 +1086,7 @@ export type PortfolioAIReport = {
 	risk_level: string;
 	style_match: string;
 	executive_summary: string;
+	audit_summary?: string;
 	primary_risks: string[];
 	concentration_findings: string[];
 	holdings: Array<{
@@ -1097,6 +1098,8 @@ export type PortfolioAIReport = {
 		action: string;
 		confirmation: string;
 		invalidation: string;
+		trend_audit?: string;
+		previous_action?: string;
 	}>;
 	adjustment_order: string[];
 	scenarios: Array<{ name: string; condition: string; portfolio_action: string }>;
@@ -1108,6 +1111,8 @@ export type PortfolioAIReport = {
 
 export type PortfolioInspectionReport = {
 	id: string;
+	previous_inspection_id?: string;
+	audit_base_date?: string;
 	prompt_version: string;
 	algorithm_version?: string;
 	profile: PortfolioProfileRules;
@@ -1121,7 +1126,16 @@ export type PortfolioInspectionJob = {
 	id: string;
 	status: 'running' | 'succeeded' | 'partial' | 'failed' | 'interrupted' | string;
 	stage: string;
-	request: { trader_profile: PortfolioTraderProfile; holdings: PortfolioHolding[]; ai_provider?: 'hermes' | 'codex_desktop' | 'antigravity_desktop'; model?: string; reasoning_effort?: string; desktop_node_id?: string; desktop_workspace_id?: string };
+	request: {
+		trader_profile: PortfolioTraderProfile;
+		holdings: PortfolioHolding[];
+		ai_provider?: 'hermes' | 'codex_desktop' | 'antigravity_desktop';
+		model?: string;
+		reasoning_effort?: string;
+		desktop_node_id?: string;
+		desktop_workspace_id?: string;
+		previous_inspection_id?: string;
+	};
 	results: PortfolioHoldingResult[];
 	completed_stocks: number;
 	total_stocks: number;

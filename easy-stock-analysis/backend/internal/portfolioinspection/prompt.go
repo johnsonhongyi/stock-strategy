@@ -50,7 +50,26 @@ func compactResearch(analysis *stockanalysis.Analysis) *stockanalysis.ResearchSy
 	return &analysis.ResearchReport.ResearchSynthesis
 }
 
-func buildPrompt(request Request, results []HoldingResult, metrics Metrics, rules ProfileRules) (string, error) {
+type PreviousHoldingBaseline struct {
+	Symbol         string `json:"symbol"`
+	PortfolioRole  string `json:"portfolio_role"`
+	ActionPriority string `json:"action_priority"`
+	Action         string `json:"action"`
+	Confirmation   string `json:"confirmation"`
+	Invalidation   string `json:"invalidation"`
+	Conclusion     string `json:"conclusion"`
+}
+
+type PreviousInspectionBaseline struct {
+	InspectionID     string                             `json:"inspection_id"`
+	GeneratedAt      string                             `json:"generated_at"`
+	HealthScore      int                                `json:"health_score"`
+	RiskLevel        string                             `json:"risk_level"`
+	ExecutiveSummary string                             `json:"executive_summary"`
+	Holdings         map[string]PreviousHoldingBaseline `json:"holdings"`
+}
+
+func buildPrompt(request Request, results []HoldingResult, metrics Metrics, rules ProfileRules, baseline *PreviousInspectionBaseline) (string, error) {
 	stocks := make([]compactHoldingAnalysis, 0, len(results))
 	failed := make([]string, 0)
 	for _, result := range results {
@@ -88,6 +107,9 @@ func buildPrompt(request Request, results []HoldingResult, metrics Metrics, rule
 		"holdings": stocks, "failed_holdings": failed, "cash_percent": 100 - metrics.TotalPositionPercent,
 		"deterministic_summary": map[string]any{"health_score": metrics.HealthScore, "risk_level": riskLevelForMetrics(metrics, rules), "style_match": styleMatchLabel(metrics.StyleMatchScore)},
 	}
+	if baseline != nil {
+		payload["previous_inspection_baseline"] = baseline
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -107,17 +129,22 @@ func buildPrompt(request Request, results []HoldingResult, metrics Metrics, rule
 10. risk_contribution必须使用输入中的确定性风险贡献比例，不得自行重算。
 11. health_score、risk_level和style_match必须原样复制deterministic_summary，不得自行重算或调整。
 12. 健康度由个股质量45%、风险韧性25%、分散程度20%、风格适配10%组成；风险之间已做递减合并，不得对同一风险重复扣分。
-13. 严格输出单个JSON对象，不输出Markdown或额外说明。
+13. 若输入包含 previous_inspection_baseline，说明本次为对前次巡检评估在新交易日走势上的【走势审核与再次更新巡检】：
+   - 必须对比前次巡检对组合及个股做出的预案、确认条件与失效条件；
+   - 审核新交易日实际走势是否兑现前次预案，在逐股输出的 trend_audit 字段中给出走势审核结论（如：“放量上攻兑现确认条件”、“弱势横盘未破失效位”、“跌破失效价触发风控”等）；
+   - 在 previous_action 字段中填入前次巡检给出的建议动作；
+   - 在 audit_summary 字段中总结对前次预案在新交易日走势检验的反思与本次更新应对策略！若无 previous_inspection_baseline，audit_summary可为空字符串。
+14. 严格输出单个JSON对象，不输出Markdown或额外说明。
 
 输出格式：
-{"health_score":0,"risk_level":"低|中|高|极高","style_match":"匹配|部分偏离|明显偏离","executive_summary":"80至180字","primary_risks":["最多8条"],"concentration_findings":["最多8条"],"holdings":[{"symbol":"","portfolio_role":"核心|进攻|防守|观察|风险拖累","risk_contribution":0,"conclusion":"","action_priority":"观察|保持|优先处理","action":"条件化动作","confirmation":"确认条件","invalidation":"失效条件"}],"adjustment_order":["最多10条"],"scenarios":[{"name":"市场增强|震荡分化|风险退潮","condition":"","portfolio_action":""}],"next_checklist":["最多10条"],"data_limitations":["最多10条"],"confidence":0.0}
+{"health_score":0,"risk_level":"低|中|高|极高","style_match":"匹配|部分偏离|明显偏离","executive_summary":"80至180字","audit_summary":"新交易日走势审核与更新说明","primary_risks":["最多8条"],"concentration_findings":["最多8条"],"holdings":[{"symbol":"","portfolio_role":"核心|进攻|防守|观察|风险拖累","risk_contribution":0,"conclusion":"","action_priority":"观察|保持|优先处理","action":"条件化动作","confirmation":"确认条件","invalidation":"失效条件","trend_audit":"走势审核结论","previous_action":"前次建议动作"}],"adjustment_order":["最多10条"],"scenarios":[{"name":"市场增强|震荡分化|风险退潮","condition":"","portfolio_action":""}],"next_checklist":["最多10条"],"data_limitations":["最多10条"],"confidence":0.0}
 
 [结构化持仓分析JSON]
 ` + string(encoded)
 	return prompt, nil
 }
 
-func localReport(request Request, results []HoldingResult, metrics Metrics, rules ProfileRules) AIReport {
+func localReport(request Request, results []HoldingResult, metrics Metrics, rules ProfileRules, baseline *PreviousInspectionBaseline) AIReport {
 	health := metrics.HealthScore
 	riskLevel := riskLevelForMetrics(metrics, rules)
 	styleMatch := styleMatchLabel(metrics.StyleMatchScore)
@@ -152,10 +179,20 @@ func localReport(request Request, results []HoldingResult, metrics Metrics, rule
 		} else if analysis.ActionPlan.DecisionMode == "short_term" {
 			role = "进攻"
 		}
+		trendAudit := ""
+		prevAction := ""
+		if baseline != nil && baseline.Holdings != nil {
+			if prevH, ok := baseline.Holdings[analysis.Symbol]; ok {
+				prevAction = prevH.Action
+				trendAudit = fmt.Sprintf("对比前次建议【%s】：新交易日结合最新量价持续观察确认【%s】与失效【%s】", firstNonEmpty(prevH.Action, "持股观察"), firstNonEmpty(prevH.Confirmation, "站上均线"), firstNonEmpty(prevH.Invalidation, "跌破止损"))
+			}
+		}
 		holdings = append(holdings, HoldingConclusion{
 			Symbol: analysis.Symbol, PortfolioRole: role, RiskContribution: byContribution[result.Holding.Symbol],
 			Conclusion: analysis.Conclusion.Summary, ActionPriority: priority, Action: analysis.ActionPlan.CurrentAction,
 			Confirmation: analysis.Conclusion.BestPath, Invalidation: analysis.ActionPlan.Invalidation,
+			TrendAudit:   trendAudit,
+			PreviousAction: prevAction,
 		})
 	}
 	sort.Slice(holdings, func(i, j int) bool { return holdings[i].RiskContribution > holdings[j].RiskContribution })
@@ -169,8 +206,13 @@ func localReport(request Request, results []HoldingResult, metrics Metrics, rule
 		adjustment = append(adjustment, "暂无必须立即处理的单一持仓，按各股确认与失效条件继续观察")
 	}
 	summary := fmt.Sprintf("当前持仓%d只、总仓位%d%%、现金%d%%，个股分析覆盖%.1f%%。组合风险为%s，交易风格匹配度%d分（%s）。优先关注高风险贡献、同题材集中和失效条件，不把单一个股结论直接等同于组合动作。", len(request.Holdings), metrics.TotalPositionPercent, metrics.CashPercent, metrics.CoveragePercent, riskLevel, metrics.StyleMatchScore, styleMatch)
+	auditSummary := ""
+	if baseline != nil {
+		auditSummary = fmt.Sprintf("本次为对比 %s 前次巡检评估进行的走势审核更新：前次健康度 %d 分，组合风险 %s。新交易日重点核验各股动作确认与失效条件，动态优化组合配置。", baseline.GeneratedAt, baseline.HealthScore, baseline.RiskLevel)
+	}
 	return AIReport{
 		HealthScore: health, RiskLevel: riskLevel, StyleMatch: styleMatch, ExecutiveSummary: summary,
+		AuditSummary: auditSummary,
 		PrimaryRisks: limitStrings(primaryRisks, 8), ConcentrationFinding: limitStrings(concentration, 8), Holdings: holdings,
 		AdjustmentOrder: limitStrings(adjustment, 10), Scenarios: []Scenario{
 			{Name: "市场增强", Condition: "市场与主要持仓题材同步增强", PortfolioAction: "保留强势核心，新增仓位仍需满足个股确认条件"},

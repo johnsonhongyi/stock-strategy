@@ -42,13 +42,14 @@ type Holding struct {
 }
 
 type Request struct {
-	TraderProfile      TraderProfile `json:"trader_profile"`
-	Holdings           []Holding     `json:"holdings"`
-	AIProvider         string        `json:"ai_provider,omitempty"`
-	Model              string        `json:"model,omitempty"`
-	ReasoningEffort    string        `json:"reasoning_effort,omitempty"`
-	DesktopNodeID      string        `json:"desktop_node_id,omitempty"`
-	DesktopWorkspaceID string        `json:"desktop_workspace_id,omitempty"`
+	TraderProfile        TraderProfile `json:"trader_profile"`
+	Holdings             []Holding     `json:"holdings"`
+	AIProvider           string        `json:"ai_provider,omitempty"`
+	Model                string        `json:"model,omitempty"`
+	ReasoningEffort      string        `json:"reasoning_effort,omitempty"`
+	DesktopNodeID        string        `json:"desktop_node_id,omitempty"`
+	DesktopWorkspaceID   string        `json:"desktop_workspace_id,omitempty"`
+	PreviousInspectionID string        `json:"previous_inspection_id,omitempty"`
 }
 
 type HoldingResult struct {
@@ -114,6 +115,8 @@ type HoldingConclusion struct {
 	Action           string  `json:"action"`
 	Confirmation     string  `json:"confirmation"`
 	Invalidation     string  `json:"invalidation"`
+	TrendAudit       string  `json:"trend_audit,omitempty"`
+	PreviousAction   string  `json:"previous_action,omitempty"`
 }
 
 type Scenario struct {
@@ -127,6 +130,7 @@ type AIReport struct {
 	RiskLevel            string              `json:"risk_level"`
 	StyleMatch           string              `json:"style_match"`
 	ExecutiveSummary     string              `json:"executive_summary"`
+	AuditSummary         string              `json:"audit_summary,omitempty"`
 	PrimaryRisks         []string            `json:"primary_risks"`
 	ConcentrationFinding []string            `json:"concentration_findings"`
 	Holdings             []HoldingConclusion `json:"holdings"`
@@ -139,14 +143,16 @@ type AIReport struct {
 }
 
 type Report struct {
-	ID               string          `json:"id"`
-	PromptVersion    string          `json:"prompt_version"`
-	AlgorithmVersion string          `json:"algorithm_version,omitempty"`
-	Profile          ProfileRules    `json:"profile"`
-	Holdings         []HoldingResult `json:"holdings"`
-	Metrics          Metrics         `json:"metrics"`
-	Conclusion       AIReport        `json:"conclusion"`
-	GeneratedAt      time.Time       `json:"generated_at"`
+	ID                   string          `json:"id"`
+	PreviousInspectionID string          `json:"previous_inspection_id,omitempty"`
+	AuditBaseDate        string          `json:"audit_base_date,omitempty"`
+	PromptVersion        string          `json:"prompt_version"`
+	AlgorithmVersion     string          `json:"algorithm_version,omitempty"`
+	Profile              ProfileRules    `json:"profile"`
+	Holdings             []HoldingResult `json:"holdings"`
+	Metrics              Metrics         `json:"metrics"`
+	Conclusion           AIReport        `json:"conclusion"`
+	GeneratedAt          time.Time       `json:"generated_at"`
 }
 
 type Job struct {

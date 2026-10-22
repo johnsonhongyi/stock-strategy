@@ -56,7 +56,7 @@
 .portfolio-history > header strong { font-size: var(--ui-font-12, 12px); }
 .portfolio-history > header small { color: var(--theme-muted, #84919d); font-size: var(--ui-font-10, 10px); }
 .portfolio-history-list { display: grid; max-height: calc(100vh - 235px); overflow-y: auto; }
-.portfolio-history-item { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: stretch; border-bottom: 1px solid var(--theme-line-soft, #edf0f2); color: var(--theme-muted, #506170); }
+.portfolio-history-item { display: grid; grid-template-columns: minmax(0, 1fr) 24px 24px; align-items: stretch; border-bottom: 1px solid var(--theme-line-soft, #edf0f2); color: var(--theme-muted, #506170); }
 .portfolio-history-item.active { background: var(--theme-surface-soft, #eef5fa); color: var(--theme-blue, #17679b); }
 .portfolio-history-select {
 	display: grid;
@@ -75,8 +75,11 @@
 .portfolio-history-select > div { display: grid; gap: 3px; min-width: 0; }
 .portfolio-history-select strong { overflow: hidden; color: var(--theme-text, #263b4c); font-size: var(--ui-font-11, 11px); text-overflow: ellipsis; white-space: nowrap; }
 .portfolio-history-select small { color: var(--theme-subtle, #8b98a3); font-size: var(--ui-font-9, 9px); }
-.portfolio-history-delete { display: grid; place-items: center; align-self: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--theme-subtle, #8996a1); cursor: pointer; }
+.portfolio-history-update,
+.portfolio-history-delete { display: grid; place-items: center; align-self: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--theme-subtle, #8996a1); cursor: pointer; }
+.portfolio-history-update:hover:not(:disabled) { background: var(--theme-blue-soft, #eaf3f8); color: var(--theme-blue, #1f6f98); }
 .portfolio-history-delete:hover:not(:disabled) { background: var(--theme-red-soft, #fff4f0); color: var(--theme-red, #a14530); }
+.portfolio-history-update:disabled,
 .portfolio-history-delete:disabled { opacity: .35; cursor: default; }
 .portfolio-history-empty { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 90px; color: var(--theme-subtle, #8a98a4); font-size: var(--ui-font-11, 11px); }
 
@@ -231,8 +234,7 @@
 .portfolio-builder-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 18px; border-top: 1px solid var(--theme-line-soft, #dce3e8); background: var(--theme-surface-soft, #f7f9fa); }
 .portfolio-builder-footer > div { display: flex; align-items: center; gap: 12px; color: var(--theme-muted, #617380); font-size: var(--ui-font-11, 11px); }
 .portfolio-builder-footer > div strong { color: var(--theme-green, #25724f); }
-.portfolio-builder-footer > button,
-.portfolio-report-header > button {
+.portfolio-builder-footer > button {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -248,6 +250,73 @@
 	cursor: pointer;
 }
 .portfolio-builder-footer > button:disabled { opacity: .48; cursor: default; }
+
+.portfolio-report-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.portfolio-report-actions button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	min-height: 32px;
+	padding: 0 12px;
+	border: 1px solid var(--theme-line, #c9d5dd);
+	border-radius: 4px;
+	background: var(--theme-surface, #fff);
+	color: var(--theme-text, #263b4c);
+	font-size: var(--ui-font-11, 11px);
+	font-weight: 700;
+	cursor: pointer;
+	transition: all .15s ease;
+}
+.portfolio-report-actions button:hover:not(:disabled) {
+	border-color: var(--theme-blue, #27769f);
+	color: var(--theme-blue, #27769f);
+	background: var(--theme-surface-soft, #f0f6fa);
+}
+.portfolio-report-actions button.primary {
+	border-color: transparent;
+	background: var(--theme-blue-solid, #1f6f98);
+	color: var(--theme-on-emphasis, #fff);
+}
+.portfolio-report-actions button.primary:hover:not(:disabled) {
+	background: var(--theme-blue-hover, #185a7b);
+}
+
+.portfolio-audit-banner {
+	display: grid;
+	gap: 6px;
+	padding: 12px 14px;
+	border: 1px solid var(--theme-blue-line, #b8d4e4);
+	border-left: 4px solid var(--theme-blue, #24729c);
+	border-radius: 5px;
+	background: var(--theme-blue-soft, #f1f8fc);
+	color: var(--theme-text, #1f3747);
+}
+.portfolio-audit-banner > header {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	color: var(--theme-blue, #216a92);
+}
+.portfolio-audit-banner > header strong {
+	font-size: var(--ui-font-12, 12px);
+}
+.portfolio-audit-banner > header small {
+	margin-left: auto;
+	color: var(--theme-muted, #687e8d);
+	font-size: var(--ui-font-10, 10px);
+}
+.portfolio-audit-banner > p {
+	margin: 0;
+	font-size: var(--ui-font-11, 11px);
+	line-height: 1.6;
+	color: var(--theme-muted, #445967);
+}
 
 .portfolio-progress {
 	display: grid;
@@ -316,6 +385,25 @@
 .portfolio-holding-report article > header b { color: var(--theme-amber, #87643a); font-size: var(--ui-font-10, 10px); }
 .portfolio-open-stock { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 28px; padding: 5px 8px; border: 1px solid var(--theme-line, #b8ccd7); border-radius: 4px; background: var(--theme-surface-soft, #f6fafc); color: var(--theme-blue, #315f77); font-size: var(--ui-font-9, 9px); font-weight: 700; white-space: nowrap; cursor: pointer; }
 .portfolio-open-stock:hover { border-color: var(--theme-line, #709bb0); background: var(--theme-surface-soft, #edf6f9); color: var(--theme-blue, #214f67); }
+.portfolio-holding-audit {
+	display: grid;
+	gap: 4px;
+	margin: 8px 0;
+	padding: 8px 10px;
+	border-radius: 4px;
+	background: var(--theme-surface-soft, #f2f7fa);
+	border: 1px dashed var(--theme-line, #cbdbe4);
+	font-size: var(--ui-font-10, 10px);
+}
+.portfolio-holding-audit span {
+	display: block;
+	color: var(--theme-muted, #495e6d);
+	line-height: 1.5;
+}
+.portfolio-holding-audit b {
+	color: var(--theme-blue, #205c7d);
+	margin-right: 4px;
+}
 .portfolio-holding-report article > p { margin: 9px 0; color: var(--theme-muted, #536876); font-size: var(--ui-font-10, 10px); line-height: 1.7; }
 .portfolio-holding-report article > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .portfolio-holding-report article > div span { padding: 8px; background: var(--theme-surface-soft, #f5f7f8); color: var(--theme-muted, #647784); font-size: var(--ui-font-9, 9px); line-height: 1.55; overflow-wrap: anywhere; }
