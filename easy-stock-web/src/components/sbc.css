@@ -3,13 +3,41 @@
 .sbc-toolbar label { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
 .sbc-toolbar input { accent-color:#10b981; }
 .sbc-summary { padding:0 10px 8px; font-size:var(--ui-font-11, 11px); line-height:1.6; color:var(--text-secondary, #94a3b8); overflow-wrap:anywhere; }
-.kline-explorer-toolbar,.kline-viewport-tools {display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:8px 10px;color:var(--muted);font-size:var(--ui-font-11, 11px);}
+.kline-explorer { display: flex; flex-direction: column; width: 100%; min-width: 0; box-sizing: border-box; }
+.kline-explorer-toolbar,.kline-viewport-tools {display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:8px 10px;color:var(--muted);font-size:var(--ui-font-11, 11px);box-sizing:border-box;}
 .kline-explorer-toolbar {justify-content:space-between;}
 .kline-period-controls,.kline-window-actions {display:flex;gap:4px;flex-wrap:wrap;}
 .kline-explorer button {cursor:pointer;}
-.kline-explorer-toolbar button,.kline-viewport-tools button,.kline-window-launcher button {border:1px solid var(--line,#cbd5e1);border-radius:6px;padding:5px 8px;background:var(--theme-surface-soft,#f8fafc);color:var(--text,#334155);cursor:pointer;}
+.kline-explorer-toolbar button,.kline-viewport-tools button,.kline-window-launcher button {border:1px solid var(--line,#cbd5e1);border-radius:6px;padding:5px 8px;background:var(--theme-surface-soft,#f8fafc);color:var(--text,#334155);cursor:pointer;touch-action:manipulation;}
 .kline-explorer-toolbar button.active {background:var(--theme-blue-soft,#dbeafe);color:var(--blue,#2563eb);}
 .kline-window-actions {margin-left:auto;}
+
+@media (max-width: 768px) {
+	.kline-explorer-toolbar { padding: 6px 12px; gap: 6px; flex-wrap: nowrap; overflow: hidden; }
+	.kline-period-controls { flex: 1 1 auto; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; min-width: 0; padding-bottom: 2px; }
+	.kline-period-controls::-webkit-scrollbar { display: none; }
+	.kline-period-controls button { flex-shrink: 0; padding: 4px 7px; font-size: var(--ui-font-11, 11px); white-space: nowrap; }
+	.kline-window-actions { flex-shrink: 0; margin-left: 4px; }
+	.kline-window-actions button { padding: 4px 6px; font-size: var(--ui-font-11, 11px); white-space: nowrap; }
+	.sbc-toolbar { padding: 5px 12px; gap: 4px 10px; font-size: var(--ui-font-11, 11px); }
+	.sbc-summary { padding: 0 12px 6px; font-size: var(--ui-font-10, 10px); }
+	.kline-viewport-tools { padding: 5px 12px; gap: 4px; font-size: var(--ui-font-10, 10px); }
+	.kline-viewport-tools button { padding: 3px 6px; font-size: var(--ui-font-10, 10px); }
+	.sbc-window-backdrop { padding: 0; }
+	.sbc-chart-window { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; min-width: 100vw; min-height: 100vh; border-radius: 0; resize: none; }
+}
+
+@media (max-height: 520px) {
+	.kline-explorer-toolbar { padding: 4px 14px; gap: 6px; flex-wrap: nowrap; }
+	.kline-period-controls { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; min-width: 0; }
+	.kline-period-controls::-webkit-scrollbar { display: none; }
+	.kline-period-controls button { flex-shrink: 0; padding: 3px 6px; font-size: var(--ui-font-10, 10px); }
+	.kline-window-actions button { padding: 3px 6px; font-size: var(--ui-font-10, 10px); }
+	.sbc-toolbar { padding: 4px 14px; gap: 4px 8px; font-size: var(--ui-font-10, 10px); }
+	.sbc-summary { padding: 0 14px 4px; font-size: var(--ui-font-10, 10px); }
+	.kline-viewport-tools { padding: 4px 14px; gap: 4px; font-size: var(--ui-font-10, 10px); }
+	.kline-viewport-tools button { padding: 3px 6px; font-size: var(--ui-font-10, 10px); }
+}
 .watchlist-linkage {display:grid;gap:7px;padding:9px 10px;border-top:1px solid var(--line,#cbd5e1);background:var(--theme-surface-soft,#f8fafc);color:var(--text,#334155);font-size:var(--ui-font-11, 11px);}
 .watchlist-linkage-context,.watchlist-linkage-status {display:flex;flex-wrap:wrap;gap:4px 12px;color:var(--muted,#64748b);}
 .watchlist-linkage-context strong {color:var(--text,#334155);}

@@ -36,6 +36,7 @@
 	--theme-green: var(--down);
 	--theme-red: var(--up);
 	--theme-amber: var(--amber);
+	--theme-orange: #f59e0b;
 	--theme-purple: var(--purple);
 	--theme-cyan: #6cd0d6;
 	--theme-blue-soft: #233348;
@@ -51,6 +52,7 @@
 	--theme-purple-line: #6f598e;
 	--theme-cyan-line: #416d75;
 	--theme-blue-solid: #285e98;
+	--theme-blue-hover: #3570ad;
 	--theme-green-solid: #286447;
 	--theme-red-solid: #9e3e4a;
 	--theme-amber-solid: #775b22;
